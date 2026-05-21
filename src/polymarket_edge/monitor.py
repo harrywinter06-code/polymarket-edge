@@ -75,6 +75,9 @@ async def run_monitor(
             sig = detector.score_event(ev)
             if sig is None:
                 continue
+            # Upsert event so the trajectory FK resolves even for events that
+            # appeared after the last `ingest` run.
+            db.upsert_event(conn, ev, snapshot_at)
             _insert_trajectory(conn, poll_run_id=poll_run_id, sig=sig, snapshot_at=snapshot_at)
             n_written += 1
         conn.commit()

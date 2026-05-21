@@ -7,7 +7,15 @@ from pathlib import Path
 
 import typer
 
-from polymarket_edge import analysis, db, detector, fetch, monitor
+from polymarket_edge import (
+    analysis,
+    db,
+    detector,
+    fetch,
+    hl_backtest,
+    hyperliquid,
+    monitor,
+)
 
 app = typer.Typer(add_completion=False, help="Polymarket event-level edge scanner")
 
@@ -124,7 +132,9 @@ def monitor_cmd(
     db_path: Path = DEFAULT_DB,
     duration_minutes: float = typer.Option(30.0, help="How long to poll"),
     poll_interval: float = typer.Option(60.0, help="Seconds between polls"),
-    max_events_per_poll: int = typer.Option(0, help="Cap per poll (0 = no cap)"),
+    max_events_per_poll: int = typer.Option(
+        300, help="Cap per poll (0 = no cap; full unbounded fetch can OOM)"
+    ),
 ) -> None:
     """Poll active events at a fixed cadence, recording signal trajectories.
 
@@ -192,6 +202,129 @@ def runs(db_path: Path = DEFAULT_DB) -> None:
     db.init_schema(conn)
     for run_id, n, first_at, last_at in monitor.list_poll_runs(conn):
         typer.echo(f"  {run_id}  rows={n:5}  {first_at[:19]} -> {last_at[:19]}")
+
+
+# ---------- Hyperliquid (days 3-4) ----------
+
+
+@app.command("hl-ingest")
+def hl_ingest_cmd(db_path: Path = DEFAULT_DB) -> None:
+    """Snapshot the current Hyperliquid universe + funding for every perp."""
+    universe, ctxs = asyncio.run(hyperliquid.fetch_meta_and_ctxs())
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    fetched_at = hyperliquid.now_iso()
+    hyperliquid.upsert_universe(conn, universe, fetched_at)
+    n = 0
+    for u, ctx in zip(universe, ctxs, strict=True):
+        coin = u.get("name")
+        if not coin or "funding" not in ctx:
+            continue
+        hyperliquid.insert_funding_snapshot(conn, coin=coin, ctx=ctx, snapshot_at=fetched_at)
+        n += 1
+    conn.commit()
+    typer.echo(f"snapshot: {len(universe)} coins, {n} funding rows -> {db_path}")
+    sortable = [
+        (u.get("name"), float(ctx["funding"]))
+        for u, ctx in zip(universe, ctxs, strict=True)
+        if "funding" in ctx
+    ]
+    sortable.sort(key=lambda kv: kv[1], reverse=True)
+    typer.echo("top 10 by current hourly funding (annualized):")
+    for coin, f in sortable[:10]:
+        typer.echo(f"  {coin:10}  {f:+.6f}/hr  ({hyperliquid.annualize(f) * 100:+.1f}% APR)")
+
+
+@app.command("hl-history")
+def hl_history_cmd(
+    db_path: Path = DEFAULT_DB,
+    coins: str = typer.Option(
+        "",
+        help="Comma-separated coin list. Blank = top 30 by open interest (current snapshot).",
+    ),
+    days: int = typer.Option(30, help="Historical window in days"),
+    top_n_by_oi: int = typer.Option(30, help="If --coins blank: top N coins by open interest"),
+) -> None:
+    """Pull `days` of hourly funding history for a coin set and persist."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+
+    if coins.strip():
+        coin_list = [c.strip().upper() for c in coins.split(",") if c.strip()]
+    else:
+        rows = conn.execute(
+            """
+            SELECT coin, MAX(open_interest) AS oi
+            FROM hl_funding_snapshots
+            GROUP BY coin
+            ORDER BY oi DESC NULLS LAST
+            LIMIT ?
+            """,
+            (top_n_by_oi,),
+        ).fetchall()
+        coin_list = [r[0] for r in rows]
+        if not coin_list:
+            typer.echo("no snapshot data; run `hl-ingest` first")
+            raise typer.Exit(1)
+
+    typer.echo(f"pulling {days}d of funding for {len(coin_list)} coins...")
+    series_map = asyncio.run(
+        hyperliquid.fetch_funding_history_many(coin_list, days=days)
+    )
+    fetched_at = hyperliquid.now_iso()
+    total = 0
+    for coin, rows in series_map.items():
+        total += hyperliquid.insert_funding_history(conn, coin, rows, fetched_at)
+    conn.commit()
+    typer.echo(f"persisted {total} funding-history rows for {len(coin_list)} coins")
+
+
+@app.command("hl-backtest")
+def hl_backtest_cmd(
+    db_path: Path = DEFAULT_DB,
+    top_k: int = typer.Option(5, help="Number of coins to short each rebalance"),
+    trailing_hours: int = typer.Option(24, help="Trailing window for predictor"),
+    rebalance_hours: int = typer.Option(8, help="Hold period per rebalance"),
+    benchmark_coin: str = typer.Option("BTC", help="Coin for passive-short baseline"),
+) -> None:
+    """Run the funding-capture backtest over all stored historical funding."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+
+    strat = hl_backtest.backtest_top_k_trailing(
+        ticks,
+        top_k=top_k,
+        trailing_hours=trailing_hours,
+        rebalance_hours=rebalance_hours,
+    )
+    perfect = hl_backtest.backtest_perfect_hindsight(
+        ticks, top_k=top_k, rebalance_hours=rebalance_hours
+    )
+    passive = hl_backtest.backtest_passive(
+        ticks, coin=benchmark_coin, rebalance_hours=rebalance_hours
+    )
+
+    typer.echo(f"funding ticks loaded: {len(ticks):,}")
+    typer.echo(
+        f"{'strategy':45} {'n_reb':>6} {'tot_ret':>9} {'ann_ret':>9} "
+        f"{'ann_vol':>9} {'sharpe':>7} {'mdd':>8} {'hit%':>6} {'coins':>6}"
+    )
+    for r in (strat, perfect, passive):
+        typer.echo(
+            f"{r.strategy:45} {r.n_rebalances:>6} "
+            f"{r.total_return:>+9.4f} {r.annualized_return:>+9.4f} "
+            f"{r.annualized_vol:>9.4f} {r.sharpe:>+7.2f} "
+            f"{r.max_drawdown:>8.4f} {r.hit_rate * 100:>5.1f}% "
+            f"{r.n_distinct_coins_held:>6}"
+        )
+    typer.echo(
+        "\nNote: annualized return assumes funding is the only P&L source. "
+        "Real net P&L is lower (basis risk, spot funding, slippage, liquidation buffer)."
+    )
 
 
 if __name__ == "__main__":

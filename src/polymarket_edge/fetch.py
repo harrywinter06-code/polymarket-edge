@@ -9,8 +9,10 @@ from typing import Any
 import httpx
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
-PAGE_SIZE = 500
-RATE_LIMIT_SECONDS = 1.2  # gamma allows ~60 req/min unauth; stay well under
+# Large pages (500) cause MemoryError on the embedded-markets payload; 50 is
+# safe and the rate limiter still keeps us well under 60 req/min.
+PAGE_SIZE = 50
+RATE_LIMIT_SECONDS = 1.2
 DEFAULT_TIMEOUT = 30.0
 
 
