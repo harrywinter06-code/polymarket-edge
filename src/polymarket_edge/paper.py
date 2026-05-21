@@ -19,6 +19,7 @@ not to claim realistic net returns.
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from polymarket_edge import db, detector, fetch
@@ -26,6 +27,7 @@ from polymarket_edge import db, detector, fetch
 DEFAULT_NOTIONAL_USD = 100.0
 DEFAULT_FEE_BUFFER = 0.005
 DEFAULT_CLOSE_DECAY = 0.5  # close when current_gap <= decay * entry_gap
+DEFAULT_MAX_AGE_HOURS = 7 * 24  # close any position older than this regardless of decay
 
 
 async def paper_auto_round(
@@ -34,6 +36,7 @@ async def paper_auto_round(
     fee_buffer: float = DEFAULT_FEE_BUFFER,
     notional_usd: float = DEFAULT_NOTIONAL_USD,
     close_decay: float = DEFAULT_CLOSE_DECAY,
+    max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
     max_events: int | None = 300,
 ) -> tuple[int, int, int]:
     """Run one mark/close/open cycle. Returns (opened, closed, marked_open)."""
@@ -42,6 +45,7 @@ async def paper_auto_round(
     conn = db.connect(db_path)
     db.init_schema(conn)
     now = fetch.now_iso()
+    now_dt = datetime.fromisoformat(now)
 
     n_opened, n_closed, n_marked = 0, 0, 0
 
@@ -60,17 +64,23 @@ async def paper_auto_round(
             continue
         entry_gap = float(row["entry_gap"])
         side = row["side"]
-        # gap relevant to the side we entered
         current = sig.bid_gap if side == "sell_yes" else sig.ask_gap
+        opened_dt = datetime.fromisoformat(row["opened_at"])
+        age_hours = (now_dt - opened_dt).total_seconds() / 3600.0
+        close_reason: str | None = None
         if abs(current) <= close_decay * abs(entry_gap):
+            close_reason = "decay"
+        elif age_hours >= max_age_hours:
+            close_reason = "max_age"
+        if close_reason is not None:
             pnl = float(row["notional_usd"]) * (abs(entry_gap) - abs(current))
             conn.execute(
                 """
                 UPDATE paper_positions
-                SET closed_at = ?, realized_pnl_usd = ?, close_reason = 'decay'
+                SET closed_at = ?, realized_pnl_usd = ?, close_reason = ?
                 WHERE id = ?
                 """,
-                (now, pnl, row["id"]),
+                (now, pnl, close_reason, row["id"]),
             )
             n_closed += 1
         else:

@@ -136,28 +136,30 @@ def insert_funding_history(
     coin: str,
     rows: list[dict[str, Any]],
     fetched_at: str,
-) -> int:
-    n = 0
+) -> tuple[int, int]:
+    """Insert rows. Returns (n_inserted, n_dropped_malformed).
+
+    Malformed rows are counted, not silently swallowed.
+    """
+    n_ok = 0
+    n_bad = 0
     for r in rows:
         try:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO hl_funding_history
-                (coin, t, funding, premium, fetched_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    coin,
-                    int(r["time"]),
-                    float(r["fundingRate"]),
-                    _safe_float(r.get("premium")),
-                    fetched_at,
-                ),
-            )
-            n += 1
+            t = int(r["time"])
+            funding = float(r["fundingRate"])
         except (KeyError, ValueError, TypeError):
+            n_bad += 1
             continue
-    return n
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO hl_funding_history
+            (coin, t, funding, premium, fetched_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (coin, t, funding, _safe_float(r.get("premium")), fetched_at),
+        )
+        n_ok += 1
+    return n_ok, n_bad
 
 
 def _safe_float(v: Any) -> float | None:

@@ -1,40 +1,110 @@
 # polymarket-edge
 
-Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets.
+Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application.
 
-## Thesis
+A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number.
 
-Polymarket enforces `P(YES) + P(NO) = $1` per market via order-book mirroring — every buy of YES at price *p* is simultaneously visible as a sell of NO at `1 - p`. As a result, intra-market arbs are competed out in steady state.
+## What it does
 
-The non-trivial pricing signal lives at the **event level**. For a `negRisk` event with N mutually-exclusive markets, the sum of YES probabilities across the event must equal 1.0 in a fair market. Deviations imply a tradeable arb:
+**Polymarket leg.** `P(YES) + P(NO) = $1` is contract-enforced per market via the CLOB order-mirroring rule — every buy of YES at price *p* is simultaneously visible as a sell of NO at `1 - p`. Intra-market arbs are competed out in steady state, so the non-trivial signal lives at the **event** level. For a `negRisk` event with *N* mutually-exclusive markets, the sum of YES probabilities across the event must equal 1.0 in fair pricing. Deviations imply tradeable arb:
 
-- `sum(best_bid_yes) > 1 + fees`: **sell-side arb** — sell YES across all markets, settle one at $1.00, profit the spread.
-- `sum(best_ask_yes) < 1 - fees`: **buy-side arb** — buy YES across all markets, one settles at $1.00, profit the spread.
+- `sum(best_bid_yes) > 1`: **sell-side** — sell YES across all markets; exactly one settles at $1.
+- `sum(best_ask_yes) < 1`: **buy-side** — buy YES across all markets; exactly one settles at $1.
 
-## Status
+The scanner ingests every active event from the gamma API, scores every `negRisk` event, and flags deviations exceeding a configurable fee buffer. A forward-observation `monitor` records signal trajectories; the `persistence` and `forward-test` analyses measure how quickly flagged signals decay toward fair.
 
-Day 1 of a 5-day build. Live scope:
+**Hyperliquid leg.** The info endpoint exposes hourly funding per perpetual and an unconstrained historical series via `fundingHistory`. The backtest tests a top-K trailing-window funding-capture strategy: at each rebalance tick, rank coins by trailing-mean funding, short the top K (equal-weight), realize the actual funding flow over the next interval. Benchmarks: perfect-hindsight (look-ahead top-K) and passive-short on a chosen coin.
 
-- Pull active events + markets from the Polymarket gamma API
-- Persist events / markets / snapshots / signals to SQLite
-- Score every active `negRisk` event for both arb directions
-- Flag signals that exceed a configurable fee buffer
+## Results (with sensitivity)
 
-Days 2–5: historical backtest, Hyperliquid funding-capture scanner, live paper-trading, research note.
+**Polymarket — live snapshot (build window).** Across 100 active events / 1,440 markets / 18 `negRisk` events scored, three real microstructure deviations at the 50bp threshold:
 
-## Setup
+| event | n_markets | gap | direction | category | category fee | clears taker fee? |
+|---|---|---|---|---|---|---|
+| 2026 FIFA World Cup Winner | 48 | 150bp | sell-side | Sports | 0.75% | **yes** (~75bp net) |
+| 2028 US Election (party) | 2 | 100bp | buy-side | Politics | 1.00% | no |
+| Harvey Weinstein sentencing | 6 | 80bp | sell-side | Culture | ~1.25% | no |
 
-```
-uv sync
-uv run polymarket-edge ingest          # pull + persist active events
-uv run polymarket-edge scan            # score + flag negRisk events
-uv run polymarket-edge stats           # row counts
-uv run pytest                          # unit tests
-```
+The World Cup signal clears as a *net* edge after Sports-category taker fees; the others don't, but maker-only execution (0% + 20-25% rebate) clears all of them. Top-of-book gaps only — book depth not measured.
+
+**Hyperliquid — backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
+
+| top_K | trail | rebal | n | annualized | Sharpe | hit% |
+|---|---|---|---|---|---|---|
+| 3 | 24h | 8h | 56 | **+21.5%** | +28.7 | 92.9% |
+| 5 | 24h | 8h | 56 | +19.0% | +37.0 | 98.2% |
+| 10 | 24h | 8h | 56 | +14.9% | +49.5 | 98.2% |
+| perfect-hindsight K=5 | — | 8h | 59 | +22.3% | +39.5 | 100.0% |
+| passive short BTC | — | 8h | 62 | +2.3% | +13.4 | 66.1% |
+| passive short DOGE | — | 8h | — | +10.8% | +204.8 | — |
+| passive short LINK | — | 8h | — | +10.6% | +92.4 | — |
+
+**Honest decomposition** of the +19.0% top-5 result: ~11.0% comes from the Hyperliquid base-rate funding floor (interest-rate component, ~10.95% APR) — any coin near zero premium pays shorts this passively. The remaining **~8.0 percentage points** are the *excess from coin selection* by the trailing-mean predictor. Quoting the top-5 result as "8× passive BTC" would be misleading: BTC had negative-premium episodes that DOGE/LINK/AVAX didn't.
+
+The trailing-24h predictor recovers **~85% of the perfect-hindsight top-5 ceiling**.
 
 ## Limitations (read before trusting any number)
 
-- The arb math assumes mutually exclusive AND fully exhaustive coverage within a `negRisk` event. Some events have a `negRiskOther` market representing residual outcomes; the detector flags this case but does not adjust the sum constraint for it yet.
-- Quote-fill assumption is `best_bid` / `best_ask`. Real fills cross the book and move price — small arbs (<2%) are unlikely to be executable after Polymarket taker fees.
-- Look-ahead bias is absent here because the scanner only scores current snapshots; historical backtest comes day 2 and will need careful point-in-time reconstruction.
-- Rate limit on the gamma API is ~60 req/min unauth; ingestion paginates with a 1.2s cooldown to stay well under.
+- **Polymarket detector** treats `negRisk: true` as mutually exclusive *and* exhaustive. The `negRiskOther` market breaks exhaustivity; the detector records its presence but does not adjust the sum constraint. `negRiskAugmented: true` events (e.g. the World Cup, 2028 Election) allow new outcomes to be added mid-event, softening the strict sum=1 bound. Weinstein is NOT augmented, so its 80bp signal is structurally cleaner than the World Cup's 150bp.
+- **Fee model.** Polymarket fees are per-category and probability-curved (peaked at 50%), not the flat 2% I initially assumed. Sports 0.75%, Politics 1.0%, Geopolitical 0%, Culture ~1.25%, Crypto 1.8%, Makers 0% + 20-25% rebate. The "fee-clearable" column above is taker-side; maker-only execution clears all listed gaps.
+- **Top-of-book only.** The detector reads `bestBid` / `bestAsk` and ignores depth. A 150bp gap at $50 of size is not the same as 150bp at $5,000.
+- **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap (and was supposed to run for hours during the build; ran into a host-side virtual-memory limit — see REDTEAM.md item 2d).
+- **Hyperliquid backtest** measures funding flows only. Hedge-leg cost (spot/perp basis, spot funding, slippage) is NOT modeled; reported Sharpe is an upper bound, real net Sharpe is low single digits. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
+- **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
+- **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.
+
+## Architecture
+
+```
+gamma API           CLOB API              info endpoint
+    │                  │                     │
+    ▼                  ▼                     ▼
+fetch.py        historical.py          hyperliquid.py
+    │                  │                     │
+    └────── db.py (SQLite, WAL) ─────────────┘
+                       │
+       ┌───────────────┼──────────────────────┐
+       ▼               ▼                      ▼
+  detector.py      monitor.py             hl_backtest.py
+  (negRisk         (timestamped           (top-K trail /
+   sum-of-YES      trajectories per       perfect-hindsight /
+   detector)        observation run)       passive)
+       │               │                      │
+       └─── analysis.py / paper.py ───────────┘
+                       │
+                       ▼
+                  report.py → REPORT.md
+```
+
+## Setup
+
+```bash
+uv sync
+uv run polymarket-edge ingest          # pull + persist active events
+uv run polymarket-edge scan            # score every negRisk event, persist + print top
+uv run polymarket-edge monitor \
+    --duration-minutes 30 --poll-interval 90 --max-events-per-poll 100
+uv run polymarket-edge persistence     # forward-test + decay analysis
+uv run polymarket-edge hl-ingest       # snapshot Hyperliquid funding for all 230 perps
+uv run polymarket-edge hl-history \
+    --coins BTC,ETH,SOL --days 30      # pull historical funding
+uv run polymarket-edge hl-backtest     # run the funding-capture backtest
+uv run polymarket-edge paper-auto      # one round of paper-trading
+uv run polymarket-edge report          # write REPORT.md
+uv run pytest                          # 25 tests
+PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
+```
+
+## Day-by-day build
+
+- **Day 1.** Polymarket gamma + CLOB endpoints verified live. SQLite schema. Async paginated ingestion. Event-level no-arb detector. CLI: `ingest`/`scan`/`stats`. 9 tests.
+- **Day 2.** `signal_trajectories` table. `monitor` polling loop tagged by run ID. `persistence_stats` / `threshold_counts` / `forward_test` analysis. CLI: `monitor`/`persistence`/`runs`. 5 tests.
+- **Days 3–4.** Hyperliquid info-endpoint fetcher. `hl_funding_snapshots` + `hl_funding_history`. Three backtest strategies (trailing-mean, perfect-hindsight, passive-short). CLI: `hl-ingest`/`hl-history`/`hl-backtest`. 7 tests.
+- **Day 5.** Paper-trading engine (`paper.py`). Research-note generator (`report.py`). CLI: `paper-auto`/`paper-pnl`/`report`. Initial README.
+- **Day 5 (red-team).** Self-audit pass. Three real fixes (silent error swallow in `insert_funding_history`, max-age close trigger in paper-trading, monitor default cap), one defensive hardening (partial-data check in trailing backtest), four narrative corrections (fee model, "8× BTC" framing, `negRiskAugmented` caveat, pattern novelty). See [REDTEAM.md](REDTEAM.md) for the full audit. 4 new tests (25 total).
+
+## What would be next
+
+- Polymarket: account for `negRiskOther` and `negRiskAugmented` shifts in the sum constraint; pull `/order-book` for each market in a flagged event to measure executable depth at gap; long-window monitor run for real persistence numbers.
+- Hyperliquid: pair funding capture with a real spot/perp hedge model; pull spot prices and compute realized hedge P&L per period.
+- Cross-venue: pair Polymarket binary outcomes that are statistically linked to onchain assets (regulatory-decision markets vs BTC funding skew) and test for joint mispricings.

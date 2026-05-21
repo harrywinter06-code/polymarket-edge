@@ -2,8 +2,11 @@ __pycache__/
 *.pyc
 .venv/
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
+_redteam_*.json
 .ruff_cache/
 .pytest_cache/
 .ty_cache/

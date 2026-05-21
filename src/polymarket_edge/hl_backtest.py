@@ -190,19 +190,19 @@ def backtest_top_k_trailing(
         top = sorted(trail_mean.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
         held = [c for c, _ in top]
         coins_held.update(held)
-        # Realize funding over the next rebalance_hours window
+        # Realize funding over the next rebalance_hours window. Require a
+        # complete future window per coin to avoid the partial-data bias.
         future = grid[i : i + rebalance_hours]
-        realized = 0.0
+        total_short_pnl = 0.0
         per_coin_count = 0
         for c in held:
             m = maps[c]
             vals = [m[t] for t in future if t in m]
-            if vals:
-                # Short side: receive positive funding, pay negative
-                realized += sum(vals) / len(held)
+            if len(vals) == len(future):
+                total_short_pnl += sum(vals)
                 per_coin_count += 1
         if per_coin_count > 0:
-            returns.append(realized)
+            returns.append(total_short_pnl / per_coin_count)
         i += rebalance_hours
     return _summary(
         strategy=f"top{top_k}_trail{trailing_hours}h_rebal{rebalance_hours}h",

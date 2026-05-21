@@ -76,3 +76,22 @@ def test_sharpe_zero_on_constant_returns() -> None:
     r = backtest_passive(ticks, coin="BTC", rebalance_hours=8)
     assert r.annualized_vol == 0.0
     assert r.sharpe == 0.0
+
+
+def test_grid_intersection_skips_periods_lacking_data_for_any_held_coin() -> None:
+    """Sanity-check that the common-timestamp-grid construction guarantees
+    every held coin has data over the rebalance window, so the per-coin
+    completeness check in the loop is defensive but not load-bearing.
+
+    Setup: BTC has 32 hours; ETH has 28. The intersection grid has 28 ticks;
+    at i=24 the requested future window is grid[24:32] = 8 ticks but only 4
+    are available, so the outer loop's `i + rebalance_hours <= len(grid)`
+    guard rejects the period entirely. No partial-data inflation can occur.
+    """
+    btc = _grid("BTC", [0.0001] * 32)
+    eth = _grid("ETH", [0.0002] * 28)
+    r = backtest_top_k_trailing(
+        btc + eth, top_k=2, trailing_hours=24, rebalance_hours=8
+    )
+    assert r.n_rebalances == 0
+    assert r.total_return == 0.0

@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-21 04:48
+Generated: 2026-05-21 05:03
 
 ## What we built and why
 
@@ -24,7 +24,7 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 | markets | 1,440 |
 | market_snapshots | 1,440 |
 | event_arb_signals | 36 |
-| signal_trajectories | 387 |
+| signal_trajectories | 720 |
 | hl_funding_history | 18,500 |
 | paper_positions | 11 |
 
@@ -50,24 +50,24 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 
 ## Polymarket — forward observation (persistence study)
 
-**Observation window:** 2026-05-21T03:43:04 -> 2026-05-21T03:46:27  (333 trajectory rows)
+**Observation window:** 2026-05-21T03:43:04 -> 2026-05-21T03:51:28  (666 trajectory rows)
 
 | metric | value |
 |---|---|
-| snapshots | 333 |
+| snapshots | 666 |
 | distinct events | 111 |
-| mean abs(gap) | 0.0208 |
+| mean abs(gap) | 0.0207 |
 | p50 abs(gap) | 0.0100 |
-| p90 abs(gap) | 0.0528 |
-| p99 abs(gap) | 0.3549 |
+| p90 abs(gap) | 0.0510 |
+| p99 abs(gap) | 0.2355 |
 | max abs(gap) | 0.4790 |
 
 **Distinct events that ever crossed each threshold during the window:**
 
 | threshold | n distinct events |
 |---|---|
-| 0.0050 | 83 |
-| 0.0100 | 63 |
+| 0.0050 | 85 |
+| 0.0100 | 68 |
 | 0.0200 | 26 |
 | 0.0500 | 12 |
 
@@ -75,9 +75,9 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 
 | metric | value |
 |---|---|
-| candidate entries | 0 |
-| mean realized gap at close | +0.0000 |
-| mean decay toward zero | +0.0000 |
+| candidate entries | 246 |
+| mean realized gap at close | -0.0102 |
+| mean decay toward zero | +0.0006 |
 
 Interpretation: a positive `mean decay toward zero` means flagged signals
 revert toward fair pricing over the hold horizon — consistent with a real

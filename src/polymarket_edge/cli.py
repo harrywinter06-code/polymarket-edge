@@ -135,7 +135,9 @@ def monitor_cmd(
     duration_minutes: float = typer.Option(30.0, help="How long to poll"),
     poll_interval: float = typer.Option(60.0, help="Seconds between polls"),
     max_events_per_poll: int = typer.Option(
-        300, help="Cap per poll (0 = no cap; full unbounded fetch can OOM)"
+        100,
+        help="Cap per poll. Larger caps require a host with enough virtual "
+        "memory; the gamma /events embedded-markets payload is heavy.",
     ),
 ) -> None:
     """Poll active events at a fixed cadence, recording signal trajectories.
@@ -274,11 +276,16 @@ def hl_history_cmd(
         hyperliquid.fetch_funding_history_many(coin_list, days=days)
     )
     fetched_at = hyperliquid.now_iso()
-    total = 0
+    total_ok, total_bad = 0, 0
     for coin, rows in series_map.items():
-        total += hyperliquid.insert_funding_history(conn, coin, rows, fetched_at)
+        ok, bad = hyperliquid.insert_funding_history(conn, coin, rows, fetched_at)
+        total_ok += ok
+        total_bad += bad
     conn.commit()
-    typer.echo(f"persisted {total} funding-history rows for {len(coin_list)} coins")
+    typer.echo(
+        f"persisted {total_ok} funding-history rows for {len(coin_list)} coins"
+        f" (dropped {total_bad} malformed)"
+    )
 
 
 @app.command("hl-backtest")
@@ -338,7 +345,8 @@ def paper_auto_cmd(
     fee_buffer: float = typer.Option(0.005, help="Min |gap| to open a position"),
     notional_usd: float = typer.Option(100.0, help="USD notional per position"),
     close_decay: float = typer.Option(0.5, help="Close when |gap| <= decay * |entry_gap|"),
-    max_events: int = typer.Option(300, help="Cap per round (0 = no cap; can OOM)"),
+    max_age_hours: float = typer.Option(168.0, help="Hard close at this age regardless of decay"),
+    max_events: int = typer.Option(100, help="Cap per round (larger caps may OOM)"),
 ) -> None:
     """One paper-trading round: open new flagged events, mark + close decayed positions."""
     cap = max_events or None
@@ -348,6 +356,7 @@ def paper_auto_cmd(
             fee_buffer=fee_buffer,
             notional_usd=notional_usd,
             close_decay=close_decay,
+            max_age_hours=max_age_hours,
             max_events=cap,
         )
     )
