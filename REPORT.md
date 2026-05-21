@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-21 21:46
+Generated: 2026-05-21 23:04
 
 ## What we built and why
 
@@ -24,7 +24,7 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 | markets | 1,440 |
 | market_snapshots | 1,440 |
 | event_arb_signals | 36 |
-| signal_trajectories | 720 |
+| signal_trajectories | 748 |
 | hl_funding_history | 18,500 |
 | paper_positions | 11 |
 
@@ -119,6 +119,14 @@ The trailing-mean predictor captures **81%** of the
 perfect-hindsight ceiling on a GROSS basis. But the Sharpe is the carry-only
 upper bound — it ignores the round-trip execution cost of the perp + spot
 hedge legs.
+
+**Bootstrap 95% CI on the headline (top-5 trail-24h rebal-8h, 56 rebalances, 2000 resamples):**
+
+| metric | point | 95% CI |
+|---|---|---|
+| annualized return | +0.1903 | [+0.1502, +0.2374] |
+| sharpe | +36.98 | [+29.91, +53.07] |
+
 
 **Net of 5 bps per leg (20 bps round-trip per rebalance):**
 

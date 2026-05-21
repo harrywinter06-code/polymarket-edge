@@ -198,6 +198,28 @@ def _hl_backtest_section(conn: sqlite3.Connection) -> str:
 
     hedge_table = _hl_hedge_table(ticks)
 
+    # Bootstrap 95% CI on the headline strategy
+    from polymarket_edge import hl_stats
+    try:
+        head_returns = hl_stats.compute_per_period_returns_trailing(
+            ticks, top_k=5, trailing_hours=24, rebalance_hours=8
+        )
+        bs = hl_stats.bootstrap_backtest_stats(
+            head_returns, hours_per_period=8, n_resamples=2000
+        )
+        ci_block = (
+            f"\n**Bootstrap 95% CI on the headline (top-5 trail-24h rebal-8h, "
+            f"{len(head_returns)} rebalances, 2000 resamples):**\n\n"
+            f"| metric | point | 95% CI |\n|---|---|---|\n"
+            f"| annualized return | {bs.annualized_return.point:+.4f} | "
+            f"[{bs.annualized_return.ci_low:+.4f}, "
+            f"{bs.annualized_return.ci_high:+.4f}] |\n"
+            f"| sharpe | {bs.sharpe.point:+.2f} | "
+            f"[{bs.sharpe.ci_low:+.2f}, {bs.sharpe.ci_high:+.2f}] |\n"
+        )
+    except Exception:
+        ci_block = ""
+
     return f"""**Dataset:** {len(ticks):,} hourly funding ticks across {len(coins)} coins.
 
 ![Funding APR per coin](funding_apr_per_coin.png)
@@ -220,6 +242,7 @@ The trailing-mean predictor captures **{capture * 100:.0f}%** of the
 perfect-hindsight ceiling on a GROSS basis. But the Sharpe is the carry-only
 upper bound — it ignores the round-trip execution cost of the perp + spot
 hedge legs.
+{ci_block}
 
 **Net of 5 bps per leg (20 bps round-trip per rebalance):**
 

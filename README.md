@@ -1,10 +1,10 @@
 # polymarket-edge
 
-[![ci](https://github.com/USER/polymarket-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/polymarket-edge/actions/workflows/ci.yml)
+[![ci](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml)
 
 Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application.
 
-A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md).
+A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md). A cross-venue case study (Fed-rate-cuts Polymarket market vs BTC perp funding, null result, rigorous method) lives in [CROSSVENUE.md](CROSSVENUE.md). A single-file [`dashboard.html`](dashboard.html) renders the headline numbers and charts in a browser without external dependencies.
 
 ## What it does
 
@@ -41,6 +41,14 @@ This is the core finding of the project. A top-of-book gap detector flags all th
 
 Gross decomposition of the +19.0% top-5: ~11.0% comes from the base-rate funding floor (interest-rate component, ~10.95% APR — any coin near zero premium pays shorts this passively). The remaining ~8.0 percentage points are the selection excess from the trailing-mean predictor. The trailing-24h variant recovers ~85% of the perfect-hindsight K=5 ceiling.
 
+**Bootstrap 95% CI on the headline (5000 resamples, N=56 rebalances):**
+- Annualized return: **+19.03% [point], 95% CI [+14.88%, +23.69%]**
+- Sharpe: +36.98 [point], 95% CI [+30.24, +52.83] — wide and right-skewed (small-N artifact)
+
+The lower bound on annualized return is +14.9%, not +19% — the founder-defensible claim. Run via `polymarket-edge hl-ci`.
+
+**Funding-momentum variant** (rank by z-score of recent vs longer-window funding rather than by level) was tested and **lost** to the level-based ranker: +8.0% annualized vs +17.2% on a matched 168h-history budget. Rate-of-change does not beat level here — clean negative result documented in `hl_strategies.py`.
+
 **But every number above is gross of execution cost.** A second pass (`hl_hedge.py`) nets the short-perp + long-spot round-trip spread, charging `4 × spread_bps_per_leg` per rebalance. At a realistic 5 bps/leg (20 bps round-trip):
 
 | rebalance | gross annualized | net annualized | net Sharpe |
@@ -64,6 +72,19 @@ This is the honest answer to the question "what's the Sharpe really?": **depends
 - **Hyperliquid backtest** had hedge-leg cost modeled in a follow-on pass (`hl_hedge.py`): at 5 bps per leg (20 bps round-trip) the headline +19% becomes **−200% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. Salvageable only at weekly+ rebalance. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
 - **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
 - **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.
+
+## Cross-venue null finding (Fed-rate-cuts vs BTC)
+
+Paired the live `how-many-fed-rate-cuts-in-2026` event (YES of "no cuts in 2026") with the BTC perp on Hyperliquid over 30 days. Hypothesis: shifts in implied probability of Fed easing should propagate to BTC via the risk-on channel.
+
+61 aligned 12h buckets. Pearson lead-lag:
+
+| lag | direction | r |
+|---|---|---|
+| 0 | contemporaneous | −0.06 |
+| +3 | PM leads BTC by 36h | **+0.24** |
+
+The +0.24 at lag=+3 is roughly 1.9σ single-test on N≈60 and doesn't survive Bonferroni across nine lags. **Null finding.** The window also contained zero scheduled FOMC announcements, which is exactly when this kind of propagation should concentrate — methodologically weak setup. Full writeup, including the "why a null is itself useful" framing, in [CROSSVENUE.md](CROSSVENUE.md).
 
 ## Architecture
 
@@ -103,8 +124,11 @@ uv run polymarket-edge hl-history \
 uv run polymarket-edge hl-backtest     # run the funding-capture backtest
 uv run polymarket-edge depth <slug>    # walk the book on every market in a flagged event
 uv run polymarket-edge paper-auto      # one round of paper-trading
-uv run polymarket-edge report          # write REPORT.md
-uv run pytest                          # 25 tests
+uv run polymarket-edge hl-ci           # bootstrap 95% CIs on Sharpe / ann return
+uv run polymarket-edge report          # write REPORT.md (+ chart PNGs)
+uv run polymarket-edge dashboard       # write dashboard.html (single-file, embeds charts)
+$env:PYTHONPATH="src"; python scripts/cross_venue_case.py  # cross-venue case study
+uv run pytest                          # 54 tests
 PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 ```
 
@@ -115,7 +139,9 @@ PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 - **Days 3–4.** Hyperliquid info-endpoint fetcher. `hl_funding_snapshots` + `hl_funding_history`. Three backtest strategies (trailing-mean, perfect-hindsight, passive-short). CLI: `hl-ingest`/`hl-history`/`hl-backtest`. 7 tests.
 - **Day 5.** Paper-trading engine (`paper.py`). Research-note generator (`report.py`). CLI: `paper-auto`/`paper-pnl`/`report`. Initial README.
 - **Day 5 (red-team).** Self-audit pass. Three real fixes (silent error swallow in `insert_funding_history`, max-age close trigger in paper-trading, monitor default cap), one defensive hardening (partial-data check in trailing backtest), four narrative corrections (fee model, "8× BTC" framing, `negRiskAugmented` caveat, pattern novelty). 4 new tests (25 total).
-- **Day 5 (depth pass).** Built `book_depth.py` to answer the open question from the red-team: "is the World Cup signal actually tradeable?" Walks the full `/book` for every market in a negRisk event and computes the depth-aware basket-fill. Result: the World Cup gap holds through ~$48K of basket notional; the Weinstein signal is a trap (one market has $7.83 of bid depth); the 2028 Election signal inverts to a loss by $5K/market. The depth finding is now the project's headline. 6 more tests (31 total). See [REDTEAM.md §3a](REDTEAM.md) for the full table.
+- **Day 5 (depth pass).** Built `book_depth.py` to answer the open question from the red-team: "is the World Cup signal actually tradeable?" Walks the full `/book` for every market in a negRisk event and computes the depth-aware basket-fill. Result: the World Cup gap holds through ~$48K of basket notional; the Weinstein signal is a trap (one market has $7.83 of bid depth); the 2028 Election signal inverts to a loss by $5K/market. 6 more tests (31 total).
+- **Day 5 (upgrade pass — parallel agent work).** Four concurrent additions: `plots.py` (chart generation, matplotlib), `hl_hedge.py` (spread-cost-net backtest; finding: +19% becomes −200% at 5bp/leg, 8h cadence not net-viable), `RECIPES.md` (Ask-Gina-specific recipe framing), and GitHub Actions CI. +14 tests (45 total).
+- **Day 5 (impressive pass — parallel agent work).** Four more concurrent additions: `dashboard.py` (single-file HTML with embedded charts), `cross_venue.py` + `CROSSVENUE.md` (Fed-cuts↔BTC null finding, methodology), `hl_stats.py` (bootstrap 95% CIs — headline +19% becomes "+19% point, [+15%, +24%] CI"), `hl_strategies.py` (funding-momentum variant — lost to level by 9pp, useful "what didn't work" data). +9 tests (**54 total**).
 
 ## What would be next
 

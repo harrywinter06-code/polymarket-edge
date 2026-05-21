@@ -10,10 +10,12 @@ import typer
 from polymarket_edge import (
     analysis,
     book_depth,
+    dashboard,
     db,
     detector,
     fetch,
     hl_backtest,
+    hl_stats,
     hyperliquid,
     monitor,
     paper,
@@ -443,6 +445,64 @@ def report_cmd(
     db.init_schema(conn)
     p = report.write_report(conn, out)
     typer.echo(f"wrote {p}")
+
+
+@app.command("dashboard")
+def dashboard_cmd(
+    db_path: Path = DEFAULT_DB,
+    out: Path = typer.Option(Path("dashboard.html"), help="Output HTML path"),  # noqa: B008
+) -> None:
+    """Generate the single-file HTML dashboard (embeds charts as base64)."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    p = dashboard.write_dashboard(conn, out)
+    typer.echo(f"wrote {p}")
+
+
+@app.command("hl-ci")
+def hl_ci_cmd(
+    db_path: Path = DEFAULT_DB,
+    top_k: int = typer.Option(5),
+    trailing_hours: int = typer.Option(24),
+    rebalance_hours: int = typer.Option(8),
+    n_resamples: int = typer.Option(5000),
+    spread_bps_per_leg: float = typer.Option(0.0, help="Net P&L when >0"),
+) -> None:
+    """Bootstrap 95% CI on annualized return and Sharpe."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+    returns = hl_stats.compute_per_period_returns_trailing(
+        ticks,
+        top_k=top_k,
+        trailing_hours=trailing_hours,
+        rebalance_hours=rebalance_hours,
+    )
+    if spread_bps_per_leg > 0:
+        cost_per_rebalance = 4 * spread_bps_per_leg / 10_000
+        returns = [r - cost_per_rebalance for r in returns]
+    stats = hl_stats.bootstrap_backtest_stats(
+        returns,
+        hours_per_period=rebalance_hours,
+        n_resamples=n_resamples,
+    )
+    label = f"top-{top_k} trail-{trailing_hours}h rebal-{rebalance_hours}h"
+    if spread_bps_per_leg > 0:
+        label += f" net of {spread_bps_per_leg}bp/leg"
+    typer.echo(f"strategy: {label}")
+    typer.echo(f"  n_periods={len(returns)}  n_resamples={stats.n_resamples}")
+    typer.echo(
+        f"  annualized_return: point={stats.annualized_return.point:+.4f}  "
+        f"95% CI [{stats.annualized_return.ci_low:+.4f}, "
+        f"{stats.annualized_return.ci_high:+.4f}]"
+    )
+    typer.echo(
+        f"  sharpe:            point={stats.sharpe.point:+.2f}  "
+        f"95% CI [{stats.sharpe.ci_low:+.2f}, {stats.sharpe.ci_high:+.2f}]"
+    )
 
 
 if __name__ == "__main__":

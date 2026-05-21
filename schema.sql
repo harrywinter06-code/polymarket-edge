@@ -153,3 +153,21 @@ CREATE TABLE IF NOT EXISTS paper_positions (
 
 CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_positions(closed_at);
 
+-- ---------- cross-venue case study: PM market vs HL perp ----------
+
+CREATE TABLE IF NOT EXISTS cross_venue_aligned (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pm_token_id TEXT NOT NULL,
+    hl_coin TEXT NOT NULL,
+    t_ms INTEGER NOT NULL,            -- bucket-start in unix ms
+    pm_price REAL NOT NULL,           -- last PM price within bucket [0..1]
+    hl_mark REAL NOT NULL,            -- last HL candle close within bucket
+    pm_delta REAL NOT NULL,           -- pm_price - prev bucket's pm_price
+    hl_log_return REAL NOT NULL,      -- log(hl_mark / prev bucket's hl_mark)
+    fetched_at TEXT NOT NULL,
+    UNIQUE (pm_token_id, hl_coin, t_ms)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cv_pair_time
+    ON cross_venue_aligned(pm_token_id, hl_coin, t_ms);
+
