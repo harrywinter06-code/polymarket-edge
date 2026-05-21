@@ -15,6 +15,8 @@ from polymarket_edge import (
     hl_backtest,
     hyperliquid,
     monitor,
+    paper,
+    report,
 )
 
 app = typer.Typer(add_completion=False, help="Polymarket event-level edge scanner")
@@ -325,6 +327,53 @@ def hl_backtest_cmd(
         "\nNote: annualized return assumes funding is the only P&L source. "
         "Real net P&L is lower (basis risk, spot funding, slippage, liquidation buffer)."
     )
+
+
+# ---------- Day 5: paper-trading + research note ----------
+
+
+@app.command("paper-auto")
+def paper_auto_cmd(
+    db_path: Path = DEFAULT_DB,
+    fee_buffer: float = typer.Option(0.005, help="Min |gap| to open a position"),
+    notional_usd: float = typer.Option(100.0, help="USD notional per position"),
+    close_decay: float = typer.Option(0.5, help="Close when |gap| <= decay * |entry_gap|"),
+    max_events: int = typer.Option(300, help="Cap per round (0 = no cap; can OOM)"),
+) -> None:
+    """One paper-trading round: open new flagged events, mark + close decayed positions."""
+    cap = max_events or None
+    n_open, n_close, n_marked = asyncio.run(
+        paper.paper_auto_round(
+            str(db_path),
+            fee_buffer=fee_buffer,
+            notional_usd=notional_usd,
+            close_decay=close_decay,
+            max_events=cap,
+        )
+    )
+    typer.echo(f"opened={n_open}  closed={n_close}  marked_open={n_marked}")
+
+
+@app.command("paper-pnl")
+def paper_pnl_cmd(db_path: Path = DEFAULT_DB) -> None:
+    """Print paper-trading P&L summary."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    s = paper.paper_pnl_summary(conn)
+    for k, v in s.items():
+        typer.echo(f"  {k:30}  {v}")
+
+
+@app.command("report")
+def report_cmd(
+    db_path: Path = DEFAULT_DB,
+    out: Path = typer.Option(Path("REPORT.md"), help="Output markdown path"),  # noqa: B008
+) -> None:
+    """Generate a markdown research note from the SQLite store."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    p = report.write_report(conn, out)
+    typer.echo(f"wrote {p}")
 
 
 if __name__ == "__main__":
