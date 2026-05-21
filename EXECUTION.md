@@ -87,9 +87,20 @@ Advanced path: place orders via py-clob-client's order-builder. The library prod
 
 ## 4b. Simulation path (UK / restricted-jurisdiction users)
 
-If you cannot legally trade live, use py-clob-client's order-builder to *construct* a signed order payload at the same prices the script suggests, but do not broadcast. Save the signed payload, the order parameters, and the live order-book snapshot from step 2 — together they form an "as-if" trade that demonstrates the full execution path was understood and runnable, without breaching jurisdiction restrictions. Document this explicitly in TRADE_LOG.md under "Maker vs taker" as "simulation — payload constructed, not broadcast."
+If you cannot legally trade live, run `scripts/sign_simulation_trade.py` — it generates a fresh throwaway EOA key, builds maker orders at the sizing script's prices for the same flagged event, signs each via py-clob-client's `OrderBuilder` (EIP-712 over the canonical CLOB Order schema), verifies each signature locally, and writes the signed payloads to `signed_orders/[slug]-[timestamp].json`. It does NOT broadcast.
 
-This is honestly weaker as a credibility signal than a real fill, but it is honest, and the Ask Gina reviewer will respect it more than a paper-only project that quietly claimed to have traded.
+```powershell
+uv run --script scripts/sign_simulation_trade.py `
+    --slug 2026-fifa-world-cup-winner-595 `
+    --total-usd 5 `
+    --max-orders 3
+```
+
+The output JSON contains, per order: the full EIP-712 Order struct (salt / maker / signer / taker / tokenId / makerAmount / takerAmount / expiration / nonce / feeRateBps / side / signatureType) and the 65-byte secp256k1 signature. Posting that JSON to `https://clob.polymarket.com/order` with the corresponding throwaway address holding a funded Polymarket proxy would result in a live order — we deliberately don't do that. The artefact demonstrates: (1) the build understood and implemented the on-chain order construction, (2) the signatures are valid EIP-712 not stubs, (3) the only thing between this and a live trade is jurisdiction-legal funding.
+
+Document in TRADE_LOG.md under "Maker vs taker" as "simulation — payload constructed via `sign_simulation_trade.py`, not broadcast. Throwaway address: 0x…. Output JSON: `signed_orders/…json`."
+
+This is honestly weaker as a credibility signal than a real fill, but it is honest, and a quant reviewer will respect "I built the signing path, didn't broadcast because of jurisdiction" more than a paper-only project that quietly claimed to have traded.
 
 ## 5. Capture immediately after each fill
 

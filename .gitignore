@@ -9,6 +9,7 @@ __pycache__/
 _redteam_*.json
 microstructure_progress.log
 microstructure_results.txt
+signed_orders/
 .ruff_cache/
 .pytest_cache/
 .ty_cache/
