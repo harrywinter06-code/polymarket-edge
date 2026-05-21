@@ -17,15 +17,15 @@ The scanner ingests every active event from the gamma API, scores every `negRisk
 
 ## Results (with sensitivity)
 
-**Polymarket — live snapshot (build window).** Across 100 active events / 1,440 markets / 18 `negRisk` events scored, three real microstructure deviations at the 50bp threshold:
+**Polymarket — live snapshot, depth-aware (build window).** Across 100 active events / 1,440 markets / 18 `negRisk` events scored, three real microstructure deviations at the 50bp threshold — but **only one of them actually trades**:
 
-| event | n_markets | gap | direction | category | category fee | clears taker fee? |
-|---|---|---|---|---|---|---|
-| 2026 FIFA World Cup Winner | 48 | 150bp | sell-side | Sports | 0.75% | **yes** (~75bp net) |
-| 2028 US Election (party) | 2 | 100bp | buy-side | Politics | 1.00% | no |
-| Harvey Weinstein sentencing | 6 | 80bp | sell-side | Culture | ~1.25% | no |
+| event | n_mkts | top-of-book gap | gap at $1K/mkt | tradeable? |
+|---|---|---|---|---|
+| 2026 FIFA World Cup Winner | 48 | +150bp sell | **+150bp** | **YES** — $48K basket, $145K max before Iran throttles |
+| 2028 US Election party | 2 | +100bp buy | +50bp, **inverts at $5K** | marginal — small size only |
+| Harvey Weinstein sentencing | 6 | +80bp sell | **−1,040bp at $50/mkt** | **TRAP** — one market has $7.83 total bid depth |
 
-The World Cup signal clears as a *net* edge after Sports-category taker fees; the others don't, but maker-only execution (0% + 20-25% rebate) clears all of them. Top-of-book gaps only — book depth not measured.
+This is the core finding of the project. A top-of-book gap detector flags all three. A *depth-aware* basket model — `book_depth.py`, which walks each market's full `/book` and computes the basket-trade average fill — separates the real signal (World Cup, executable at meaningful size and clearing the 0.75% Sports taker fee) from the marginal one (Election, fee-clearable only at retail size) from the trap (Weinstein, where the naïve top-of-book reading would lose money instantly).
 
 **Hyperliquid — backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
 
@@ -47,7 +47,7 @@ The trailing-24h predictor recovers **~85% of the perfect-hindsight top-5 ceilin
 
 - **Polymarket detector** treats `negRisk: true` as mutually exclusive *and* exhaustive. The `negRiskOther` market breaks exhaustivity; the detector records its presence but does not adjust the sum constraint. `negRiskAugmented: true` events (e.g. the World Cup, 2028 Election) allow new outcomes to be added mid-event, softening the strict sum=1 bound. Weinstein is NOT augmented, so its 80bp signal is structurally cleaner than the World Cup's 150bp.
 - **Fee model.** Polymarket fees are per-category and probability-curved (peaked at 50%), not the flat 2% I initially assumed. Sports 0.75%, Politics 1.0%, Geopolitical 0%, Culture ~1.25%, Crypto 1.8%, Makers 0% + 20-25% rebate. The "fee-clearable" column above is taker-side; maker-only execution clears all listed gaps.
-- **Top-of-book only.** The detector reads `bestBid` / `bestAsk` and ignores depth. A 150bp gap at $50 of size is not the same as 150bp at $5,000.
+- **Detector vs depth.** The event-level `detector` reads top-of-book only — useful for flagging candidates, but it cannot tell a real signal from a trap. The `book_depth` module is what makes the signal actionable; the depth pass is mandatory before any size sizing.
 - **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap (and was supposed to run for hours during the build; ran into a host-side virtual-memory limit — see REDTEAM.md item 2d).
 - **Hyperliquid backtest** measures funding flows only. Hedge-leg cost (spot/perp basis, spot funding, slippage) is NOT modeled; reported Sharpe is an upper bound, real net Sharpe is low single digits. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
 - **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
@@ -89,6 +89,7 @@ uv run polymarket-edge hl-ingest       # snapshot Hyperliquid funding for all 23
 uv run polymarket-edge hl-history \
     --coins BTC,ETH,SOL --days 30      # pull historical funding
 uv run polymarket-edge hl-backtest     # run the funding-capture backtest
+uv run polymarket-edge depth <slug>    # walk the book on every market in a flagged event
 uv run polymarket-edge paper-auto      # one round of paper-trading
 uv run polymarket-edge report          # write REPORT.md
 uv run pytest                          # 25 tests
@@ -101,7 +102,8 @@ PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 - **Day 2.** `signal_trajectories` table. `monitor` polling loop tagged by run ID. `persistence_stats` / `threshold_counts` / `forward_test` analysis. CLI: `monitor`/`persistence`/`runs`. 5 tests.
 - **Days 3–4.** Hyperliquid info-endpoint fetcher. `hl_funding_snapshots` + `hl_funding_history`. Three backtest strategies (trailing-mean, perfect-hindsight, passive-short). CLI: `hl-ingest`/`hl-history`/`hl-backtest`. 7 tests.
 - **Day 5.** Paper-trading engine (`paper.py`). Research-note generator (`report.py`). CLI: `paper-auto`/`paper-pnl`/`report`. Initial README.
-- **Day 5 (red-team).** Self-audit pass. Three real fixes (silent error swallow in `insert_funding_history`, max-age close trigger in paper-trading, monitor default cap), one defensive hardening (partial-data check in trailing backtest), four narrative corrections (fee model, "8× BTC" framing, `negRiskAugmented` caveat, pattern novelty). See [REDTEAM.md](REDTEAM.md) for the full audit. 4 new tests (25 total).
+- **Day 5 (red-team).** Self-audit pass. Three real fixes (silent error swallow in `insert_funding_history`, max-age close trigger in paper-trading, monitor default cap), one defensive hardening (partial-data check in trailing backtest), four narrative corrections (fee model, "8× BTC" framing, `negRiskAugmented` caveat, pattern novelty). 4 new tests (25 total).
+- **Day 5 (depth pass).** Built `book_depth.py` to answer the open question from the red-team: "is the World Cup signal actually tradeable?" Walks the full `/book` for every market in a negRisk event and computes the depth-aware basket-fill. Result: the World Cup gap holds through ~$48K of basket notional; the Weinstein signal is a trap (one market has $7.83 of bid depth); the 2028 Election signal inverts to a loss by $5K/market. The depth finding is now the project's headline. 6 more tests (31 total). See [REDTEAM.md §3a](REDTEAM.md) for the full table.
 
 ## What would be next
 

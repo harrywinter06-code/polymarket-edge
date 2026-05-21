@@ -70,6 +70,47 @@ The 38-coin universe is "what's listed today, with 30d history available." Coins
 **3e. The 12h `/prices-history` floor.**
 I cite [py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216) as the source. The issue was filed in 2024. I attempted to re-verify it directly against the live API during this audit but the probe failed on a system-level memory issue; I am taking the documented constraint at face value. If the floor was later relaxed, an execution-grade historical backtest of Polymarket signals would become feasible.
 
+## 3a. Depth analysis — promoted from "open" to "done", and the result is the most interesting finding in the build
+
+After committing the first red-team pass I went back and built `book_depth.py` to answer item 3a above ("Book depth on the flagged World Cup signal"). The result completely changes how the three flagged signals should be read.
+
+For each flagged event, the depth-aware basket gap as you scale notional per market:
+
+**2026 FIFA World Cup Winner (negRiskAugmented, 48 markets, sell-side):**
+
+| notional / market | gap (top-of-book) | gap (depth-aware) | throttle |
+|---|---|---|---|
+| $10 | +150bp | +150bp | Spain $10 |
+| $100 | +150bp | +150bp | Spain $100 |
+| $1,000 | +150bp | +150bp | NZ $1,000 |
+| $5,000 | +150bp | +150bp | Iran $3,037 (book exhausted) |
+
+The 150bp gap is **real and tradeable** through a $48,000 basket ($1K × 48 markets), and the maximum basket is ~$145K bottlenecked by Iran's full bid book.
+
+**2028 US Presidential Election (negRiskAugmented, 2 markets, buy-side):**
+
+| notional / market | gap (top-of-book) | gap (depth-aware) | throttle |
+|---|---|---|---|
+| $10 | +100bp | +100bp | Republicans $10 |
+| $100 | +100bp | +100bp | Republicans $100 |
+| $1,000 | +100bp | +50bp | Republicans $1,000 |
+| $5,000 | +100bp | **-38bp (loss)** | Republicans $5,000 |
+| $20,000 | +100bp | **-177bp (loss)** | Republicans $20,000 |
+
+The 100bp signal is **marginal**: holds at small sizes, decays smoothly, **inverts to a loss by $5K/market**.
+
+**Harvey Weinstein sentencing (non-augmented, 6 markets, sell-side):**
+
+| notional / market | gap (top-of-book) | gap (depth-aware) | throttle |
+|---|---|---|---|
+| $10 | +70bp | **-307bp (loss)** | "5-10 years" $7.83 |
+| $50 | +70bp | **-1,040bp (loss)** | "5-10 years" $7.83 |
+| $5,000 | +70bp | **-8,375bp (loss)** | "5-10 years" $7.83 |
+
+The 80bp signal is a **TRAP**. One of the six markets ("between 5 and 10 years") has only **$7.83 of total bid-side liquidity**. Selling even $10 of that market means walking the book to near-zero, and the basket P&L craters. Top-of-book gaps without depth analysis are dangerous — this is exactly the kind of false signal that loses money to anyone running a naive detector.
+
+**Lesson.** A top-of-book event-level gap detector is necessary but not sufficient. The depth-aware basket-fill model is the difference between a real signal (World Cup), a marginal one (Election), and an actively dangerous one (Weinstein). This finding is now the headline of the deliverable.
+
 ## 4. What this red-team pass changes about the deliverable
 
 - **README**: corrects fees, replaces "8× BTC" with excess-over-floor framing, adds the `negRiskAugmented` caveat, points to this document for the full audit.

@@ -9,6 +9,7 @@ import typer
 
 from polymarket_edge import (
     analysis,
+    book_depth,
     db,
     detector,
     fetch,
@@ -371,6 +372,65 @@ def paper_pnl_cmd(db_path: Path = DEFAULT_DB) -> None:
     s = paper.paper_pnl_summary(conn)
     for k, v in s.items():
         typer.echo(f"  {k:30}  {v}")
+
+
+@app.command()
+def depth(
+    slug: str = typer.Argument(..., help="Event slug to inspect"),
+    notionals: str = typer.Option("10,50,100,500,1000", help="Comma-sep USD per market"),
+) -> None:
+    """Walk the order book on every market in a negRisk event and report the
+    depth-aware basket gap at multiple notionals."""
+    events = asyncio.run(fetch.fetch_all_active_events(max_events=500))
+    ev = next((e for e in events if e.get("slug") == slug), None)
+    if ev is None:
+        typer.echo(f"event slug not found: {slug}")
+        raise typer.Exit(1)
+    if not ev.get("negRisk"):
+        typer.echo(f"warning: event {slug!r} is not negRisk; basket math may not apply")
+    active = [
+        m for m in ev.get("markets", [])
+        if m.get("active") and not m.get("closed") and m.get("acceptingOrders")
+    ]
+    typer.echo(f"event: {ev.get('title')}")
+    typer.echo(f"  negRisk={ev.get('negRisk')} negRiskAugmented={ev.get('negRiskAugmented')}")
+    typer.echo(f"  n_active_markets={len(active)}")
+    sum_bid = sum(float(m['bestBid']) for m in active if m.get('bestBid') is not None)
+    sum_ask = sum(float(m['bestAsk']) for m in active if m.get('bestAsk') is not None)
+    typer.echo(
+        f"  top-of-book: sum_bid={sum_bid:.4f}  bid_gap={sum_bid - 1:+.4f}  "
+        f"sum_ask={sum_ask:.4f}  ask_gap={1 - sum_ask:+.4f}"
+    )
+
+    typer.echo("\nfetching order books for every active market...")
+    books = asyncio.run(book_depth.fetch_books_for_event(active))
+    typer.echo(f"  fetched {len(books)} books")
+
+    sides = []
+    if sum_bid > 1.0:
+        sides.append(("sell_yes", book_depth.basket_sell_yes_depth))
+    if sum_ask < 1.0:
+        sides.append(("buy_yes", book_depth.basket_buy_yes_depth))
+    if not sides:
+        typer.echo("\nno flagged direction at top of book; nothing to walk.")
+        return
+
+    for side_name, fn in sides:
+        typer.echo(f"\n{side_name} basket sweep:")
+        typer.echo(
+            f"  {'notional/mkt':>14} {'sum_top':>9} {'sum_depth':>10} "
+            f"{'gap_top':>9} {'gap_depth':>10} {'throttle_usd':>13}  throttle_market"
+        )
+        for n_str in notionals.split(","):
+            n = float(n_str.strip())
+            r = fn(active, books, notional_per_market_usd=n)
+            typer.echo(
+                f"  {r.notional_per_market_usd:>14.2f} "
+                f"{r.sum_top_of_book:>9.4f} {r.sum_avg_fill:>10.4f} "
+                f"{r.gap_top_of_book:>+9.4f} {r.gap_depth_aware:>+10.4f} "
+                f"{r.basket_throttle_notional:>13.2f}  "
+                f"{r.basket_throttle_market}"
+            )
 
 
 @app.command("report")
