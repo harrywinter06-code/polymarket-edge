@@ -1,9 +1,9 @@
 """Research-note generator.
 
 Reads everything from the SQLite DB and writes a markdown research note
-summarizing the project. No external chart library — figures are markdown
-tables. The note is meant to be a faithful summary of what the code did and
-what the data shows, with limitations called out explicitly.
+summarizing the project. Generates accompanying chart PNGs next to the
+report path. The note is meant to be a faithful summary of what the code
+did and what the data shows, with limitations called out explicitly.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 
-from polymarket_edge import analysis, hl_backtest, monitor
+from polymarket_edge import analysis, hl_backtest, hl_hedge, monitor, plots
 
 
 def _row_count(conn: sqlite3.Connection, table: str) -> int:
@@ -129,6 +129,30 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
     )
 
 
+def _hl_hedge_table(ticks: list[hl_backtest.FundingTick]) -> str:
+    """Table showing the spread-cost-net result at each rebalance period."""
+    if not ticks:
+        return ""
+    rows = []
+    for rebal in (8, 24, 72, 168, 336):
+        gross = hl_backtest.backtest_top_k_trailing(
+            ticks, top_k=5, trailing_hours=24, rebalance_hours=rebal
+        )
+        net = hl_hedge.backtest_top_k_trailing_net_spread(
+            ticks,
+            top_k=5,
+            trailing_hours=24,
+            rebalance_hours=rebal,
+            spread_bps_per_leg=5.0,
+        )
+        rows.append(
+            f"| {rebal}h | {net.n_rebalances} | "
+            f"{gross.annualized_return:+.4f} | "
+            f"{net.annualized_return:+.4f} | {net.sharpe:+.2f} |"
+        )
+    return "\n".join(rows)
+
+
 def _hl_backtest_section(conn: sqlite3.Connection) -> str:
     ticks = hl_backtest.load_funding(conn)
     if not ticks:
@@ -172,7 +196,11 @@ def _hl_backtest_section(conn: sqlite3.Connection) -> str:
 
     capture = (trail.total_return / perfect.total_return) if perfect.total_return > 0 else 0.0
 
+    hedge_table = _hl_hedge_table(ticks)
+
     return f"""**Dataset:** {len(ticks):,} hourly funding ticks across {len(coins)} coins.
+
+![Funding APR per coin](funding_apr_per_coin.png)
 
 **Per-coin annualized funding (top 10 by mean realized rate):**
 
@@ -180,16 +208,34 @@ def _hl_backtest_section(conn: sqlite3.Connection) -> str:
 |---|---|---|
 {top_lines}
 
-**Strategy results (rebalance 8h, top-K = 5, trailing window = 24h):**
+**Gross strategy results (rebalance 8h, top-K = 5, trailing window = 24h):**
 
 | strategy | n_rebalances | total | annualized | ann_vol | sharpe | mdd | hit |
 |---|---|---|---|---|---|---|---|
 {table}
 
+![Cumulative gross P&L](hl_cumulative_pnl.png)
+
 The trailing-mean predictor captures **{capture * 100:.0f}%** of the
-perfect-hindsight ceiling. The Sharpe numbers here are an upper bound — they
-do not include the cost of the spot hedge leg, basis risk, slippage, or
-liquidation-buffer drag. Realistic net returns are materially lower.
+perfect-hindsight ceiling on a GROSS basis. But the Sharpe is the carry-only
+upper bound — it ignores the round-trip execution cost of the perp + spot
+hedge legs.
+
+**Net of 5 bps per leg (20 bps round-trip per rebalance):**
+
+| rebalance | n | gross annualized | net annualized | net Sharpe |
+|---|---|---|---|---|
+{hedge_table}
+
+At the headline 8h cadence, **the carry signal is entirely consumed by
+realistic execution costs**: net annualized is roughly -200%. The strategy is
+salvageable only at much longer rebalance periods (weekly+), where total
+return is single-digit positive. Breakeven on the 8h variant is ~0.43 bps
+per leg — below any realistic execution cost on Hyperliquid + spot.
+
+This is the honest answer to "what's the Sharpe really?" — it depends entirely
+on which rebalance cadence the strategy is run at, and the headline 8h
+configuration is not viable after costs.
 """
 
 
@@ -350,4 +396,16 @@ def write_report(conn: sqlite3.Connection, out_path: str | Path) -> Path:
     md = generate_markdown(conn)
     p = Path(out_path)
     p.write_text(md, encoding="utf-8")
+    # Best-effort chart generation next to the report. Failures are non-fatal
+    # so the markdown still writes even if a chart can't render.
+    out_dir = p.parent
+    for name, fn in (
+        ("hl_cumulative_pnl.png", lambda path: plots.plot_hl_cumulative_pnl(conn, path)),
+        ("funding_apr_per_coin.png", lambda path: plots.plot_funding_apr_per_coin(conn, path)),
+    ):
+        try:
+            fn(out_dir / name)
+        except Exception:
+            # Chart failure shouldn't kill the markdown report.
+            continue
     return p

@@ -1,8 +1,10 @@
 # polymarket-edge
 
+[![ci](https://github.com/USER/polymarket-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/polymarket-edge/actions/workflows/ci.yml)
+
 Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application.
 
-A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number.
+A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md).
 
 ## What it does
 
@@ -27,7 +29,7 @@ The scanner ingests every active event from the gamma API, scores every `negRisk
 
 This is the core finding of the project. A top-of-book gap detector flags all three. A *depth-aware* basket model — `book_depth.py`, which walks each market's full `/book` and computes the basket-trade average fill — separates the real signal (World Cup, executable at meaningful size and clearing the 0.75% Sports taker fee) from the marginal one (Election, fee-clearable only at retail size) from the trap (Weinstein, where the naïve top-of-book reading would lose money instantly).
 
-**Hyperliquid — backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
+**Hyperliquid — GROSS backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
 
 | top_K | trail | rebal | n | annualized | Sharpe | hit% |
 |---|---|---|---|---|---|---|
@@ -36,12 +38,22 @@ This is the core finding of the project. A top-of-book gap detector flags all th
 | 10 | 24h | 8h | 56 | +14.9% | +49.5 | 98.2% |
 | perfect-hindsight K=5 | — | 8h | 59 | +22.3% | +39.5 | 100.0% |
 | passive short BTC | — | 8h | 62 | +2.3% | +13.4 | 66.1% |
-| passive short DOGE | — | 8h | — | +10.8% | +204.8 | — |
-| passive short LINK | — | 8h | — | +10.6% | +92.4 | — |
 
-**Honest decomposition** of the +19.0% top-5 result: ~11.0% comes from the Hyperliquid base-rate funding floor (interest-rate component, ~10.95% APR) — any coin near zero premium pays shorts this passively. The remaining **~8.0 percentage points** are the *excess from coin selection* by the trailing-mean predictor. Quoting the top-5 result as "8× passive BTC" would be misleading: BTC had negative-premium episodes that DOGE/LINK/AVAX didn't.
+Gross decomposition of the +19.0% top-5: ~11.0% comes from the base-rate funding floor (interest-rate component, ~10.95% APR — any coin near zero premium pays shorts this passively). The remaining ~8.0 percentage points are the selection excess from the trailing-mean predictor. The trailing-24h variant recovers ~85% of the perfect-hindsight K=5 ceiling.
 
-The trailing-24h predictor recovers **~85% of the perfect-hindsight top-5 ceiling**.
+**But every number above is gross of execution cost.** A second pass (`hl_hedge.py`) nets the short-perp + long-spot round-trip spread, charging `4 × spread_bps_per_leg` per rebalance. At a realistic 5 bps/leg (20 bps round-trip):
+
+| rebalance | gross annualized | net annualized | net Sharpe |
+|---|---|---|---|
+| 8h | +19.0% | **−200.0%** | −388.6 |
+| 24h | +16.5% | −56.6% | −70.9 |
+| 72h | +5.0% | −19.4% | −10.3 |
+| 168h (weekly) | +8.0% | −2.4% | −2.7 |
+| 336h (biweekly) | +6.6% | +1.4% | ≈0 |
+
+**Breakeven on the 8h variant is ~0.43 bps per leg** — below any realistic execution cost on Hyperliquid + spot. The carry signal exists, but at the headline 8h cadence it is entirely consumed by execution costs. Only weekly+ rebalance survives, and even then only at sub-5bp/leg spread.
+
+This is the honest answer to the question "what's the Sharpe really?": **depends entirely on cadence, and the headline 8h configuration is not viable after costs**. The find is in [`scripts/spread_sensitivity.py`](scripts/spread_sensitivity.py).
 
 ## Limitations (read before trusting any number)
 
@@ -49,7 +61,7 @@ The trailing-24h predictor recovers **~85% of the perfect-hindsight top-5 ceilin
 - **Fee model.** Polymarket fees are per-category and probability-curved (peaked at 50%), not the flat 2% I initially assumed. Sports 0.75%, Politics 1.0%, Geopolitical 0%, Culture ~1.25%, Crypto 1.8%, Makers 0% + 20-25% rebate. The "fee-clearable" column above is taker-side; maker-only execution clears all listed gaps.
 - **Detector vs depth.** The event-level `detector` reads top-of-book only — useful for flagging candidates, but it cannot tell a real signal from a trap. The `book_depth` module is what makes the signal actionable; the depth pass is mandatory before any size sizing.
 - **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap (and was supposed to run for hours during the build; ran into a host-side virtual-memory limit — see REDTEAM.md item 2d).
-- **Hyperliquid backtest** measures funding flows only. Hedge-leg cost (spot/perp basis, spot funding, slippage) is NOT modeled; reported Sharpe is an upper bound, real net Sharpe is low single digits. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
+- **Hyperliquid backtest** had hedge-leg cost modeled in a follow-on pass (`hl_hedge.py`): at 5 bps per leg (20 bps round-trip) the headline +19% becomes **−200% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. Salvageable only at weekly+ rebalance. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
 - **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
 - **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.
 

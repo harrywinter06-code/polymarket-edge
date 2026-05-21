@@ -111,6 +111,24 @@ The 80bp signal is a **TRAP**. One of the six markets ("between 5 and 10 years")
 
 **Lesson.** A top-of-book event-level gap detector is necessary but not sufficient. The depth-aware basket-fill model is the difference between a real signal (World Cup), a marginal one (Election), and an actively dangerous one (Weinstein). This finding is now the headline of the deliverable.
 
+## 3b. Hyperliquid hedge cost — promoted from "open" to "done", and the result kills the headline at 8h cadence
+
+REDTEAM item 3c was the unmodeled spot/perp hedge cost. A follow-on module (`hl_hedge.py`) charges `4 × spread_bps_per_leg` per rebalance (entry perp + entry spot + exit perp + exit spot). Even at a modest 5 bps per leg (20 bps round-trip), the spread cost demolishes the original numbers because the gross carry per 8h rebalance is only 1.74 bps.
+
+**Net-of-spread result at 5 bps/leg:**
+
+| rebalance | n | gross annualized | net annualized | net Sharpe |
+|---|---|---|---|---|
+| 8h | 56 | +19.0% | **−200.0%** | −388.6 |
+| 24h | 18 | +16.5% | −56.6% | −70.9 |
+| 72h | 6 | +5.0% | −19.4% | −10.3 |
+| 168h (weekly) | 2 | +8.0% | −2.4% | −2.7 |
+| 336h (biweekly) | 1 | +6.6% | +1.4% | ≈0 |
+
+**Breakeven on the 8h variant is ~0.43 bps per leg.** Realistic round-trip costs on Hyperliquid + spot are several bps minimum. The headline +19% at 8h cadence is not net-viable. Even at weekly rebalance with the most generous 1 bp/leg assumption, net return is +10%, only just clearing the base-rate floor that a passive DOGE short captures.
+
+A churn-aware variant (only charge spread on the *changed* leg between rebalances) would soften this. Not implemented. The honest pitch coming out of this pass is: "the carry signal is real, but the headline 8h-rebalance configuration that produced +19% is not a real strategy after costs." The depth analysis killed the Weinstein "signal"; the hedge model now kills the Hyperliquid "signal" at its original cadence. Two parallel narrative corrections, both initiated by the red-team pass.
+
 ## 4. What this red-team pass changes about the deliverable
 
 - **README**: corrects fees, replaces "8× BTC" with excess-over-floor framing, adds the `negRiskAugmented` caveat, points to this document for the full audit.

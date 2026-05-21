@@ -5,6 +5,7 @@ description = "Event-level no-arb scanner for Polymarket mutually-exclusive (neg
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28",
+    "matplotlib>=3.8",
     "typer>=0.15",
 ]
 

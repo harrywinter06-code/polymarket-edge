@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-21 06:16
+Generated: 2026-05-21 21:46
 
 ## What we built and why
 
@@ -88,6 +88,8 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
 
 **Dataset:** 18,500 hourly funding ticks across 37 coins.
 
+![Funding APR per coin](funding_apr_per_coin.png)
+
 **Per-coin annualized funding (top 10 by mean realized rate):**
 
 | coin | annualized mean | annualized vol |
@@ -103,7 +105,7 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
 | DOGE | +10.8% | 0.0% |
 | LINK | +10.7% | 0.1% |
 
-**Strategy results (rebalance 8h, top-K = 5, trailing window = 24h):**
+**Gross strategy results (rebalance 8h, top-K = 5, trailing window = 24h):**
 
 | strategy | n_rebalances | total | annualized | ann_vol | sharpe | mdd | hit |
 |---|---|---|---|---|---|---|---|
@@ -111,10 +113,32 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
 | perfect_top5_rebal8h | 59 | +0.0120 | +0.2229 | 0.0056 | +39.65 | 0.0000 | 100.0% |
 | passive_short_BTC_rebal8h | 62 | +0.0013 | +0.0229 | 0.0017 | +13.43 | 0.0005 | 66.1% |
 
+![Cumulative gross P&L](hl_cumulative_pnl.png)
+
 The trailing-mean predictor captures **81%** of the
-perfect-hindsight ceiling. The Sharpe numbers here are an upper bound — they
-do not include the cost of the spot hedge leg, basis risk, slippage, or
-liquidation-buffer drag. Realistic net returns are materially lower.
+perfect-hindsight ceiling on a GROSS basis. But the Sharpe is the carry-only
+upper bound — it ignores the round-trip execution cost of the perp + spot
+hedge legs.
+
+**Net of 5 bps per leg (20 bps round-trip per rebalance):**
+
+| rebalance | n | gross annualized | net annualized | net Sharpe |
+|---|---|---|---|---|
+| 8h | 56 | +0.1903 | -1.9997 | -388.62 |
+| 24h | 18 | +0.1645 | -0.5655 | -70.90 |
+| 72h | 6 | +0.0497 | -0.1936 | -10.29 |
+| 168h | 2 | +0.0802 | -0.0241 | -2.71 |
+| 336h | 1 | +0.0657 | +0.0135 | +0.00 |
+
+At the headline 8h cadence, **the carry signal is entirely consumed by
+realistic execution costs**: net annualized is roughly -200%. The strategy is
+salvageable only at much longer rebalance periods (weekly+), where total
+return is single-digit positive. Breakeven on the 8h variant is ~0.43 bps
+per leg — below any realistic execution cost on Hyperliquid + spot.
+
+This is the honest answer to "what's the Sharpe really?" — it depends entirely
+on which rebalance cadence the strategy is run at, and the headline 8h
+configuration is not viable after costs.
 
 
 ## Live paper-trading
