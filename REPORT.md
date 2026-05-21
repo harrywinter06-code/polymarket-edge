@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-22 00:03
+Generated: 2026-05-22 00:34
 
 ## What we built and why
 

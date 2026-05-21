@@ -32,11 +32,65 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 
 from polymarket_edge.book_depth import EventDepthResult
 from polymarket_edge.hl_backtest import HOURS_PER_YEAR, FundingTick, load_funding
 
 BASE_RATE_FLOOR_APR_PCT = 10.95  # Hyperliquid base-rate funding floor, % APR
+
+# Restrained palette modelled on Tailwind slate + accents. Indices are referenced
+# explicitly (not by name) so callers stay declarative: 0/1/2 = neutrals, 3/4/5 =
+# semantic (negative / positive / warning).
+_PALETTE: tuple[str, ...] = (
+    "#0f172a",  # slate-900 — primary line
+    "#475569",  # slate-600 — secondary line / muted
+    "#1e293b",  # slate-800 — emphasis
+    "#dc2626",  # rose-600 — negative / drawdown
+    "#059669",  # emerald-600 — positive / ceiling
+    "#d97706",  # amber-600 — warning / reference
+)
+_GRID_COLOR = "#cbd5e1"  # slate-300
+_AXIS_COLOR = "#334155"  # slate-700
+_SAVE_DPI = 144
+
+matplotlib.rcParams.update(
+    {
+        "font.family": "DejaVu Sans",
+        "font.size": 10.0,
+        "axes.titlesize": 12.0,
+        "axes.titleweight": "600",
+        "axes.labelsize": 10.0,
+        "axes.labelcolor": _AXIS_COLOR,
+        "axes.edgecolor": _AXIS_COLOR,
+        "axes.linewidth": 0.5,
+        "xtick.color": _AXIS_COLOR,
+        "ytick.color": _AXIS_COLOR,
+        "xtick.labelsize": 9.0,
+        "ytick.labelsize": 9.0,
+        "legend.frameon": False,
+        "legend.fontsize": 9.0,
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+    }
+)
+
+
+def _style_axes(ax: Axes, *, grid_axis: str = "y") -> None:
+    """Apply the consistent despine + subtle-grid look used across all charts."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_linewidth(0.5)
+    ax.spines["bottom"].set_linewidth(0.5)
+    ax.spines["left"].set_color(_AXIS_COLOR)
+    ax.spines["bottom"].set_color(_AXIS_COLOR)
+    ax.grid(False)
+    ax.grid(
+        True, axis=grid_axis, linestyle=":", linewidth=0.7, alpha=0.4, color=_GRID_COLOR
+    )
+    ax.set_axisbelow(True)
+    ax.tick_params(length=3, width=0.5, pad=4)
 
 
 def _save_placeholder(out_path: Path, message: str) -> Path:
@@ -47,13 +101,14 @@ def _save_placeholder(out_path: Path, message: str) -> Path:
         message,
         ha="center",
         va="center",
-        fontsize=12,
+        fontsize=11,
+        color=_AXIS_COLOR,
         wrap=True,
         transform=ax.transAxes,
     )
     ax.set_axis_off()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=_SAVE_DPI, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -250,8 +305,8 @@ def plot_hl_cumulative_pnl(
         x_strat,
         [v * 100 for v in strat_cum],
         label=f"trailing-{trailing_hours}h top-{top_k} (strategy)",
-        color="#1f77b4",
-        linewidth=2,
+        color=_PALETTE[0],
+        linewidth=2.0,
     )
     if perf_cum:
         x_perf = list(range(1, len(perf_cum) + 1))
@@ -259,8 +314,8 @@ def plot_hl_cumulative_pnl(
             x_perf,
             [v * 100 for v in perf_cum],
             label="perfect hindsight (ceiling)",
-            color="#2ca02c",
-            linewidth=1.5,
+            color=_PALETTE[4],
+            linewidth=1.4,
             linestyle="--",
         )
     if passive_cum:
@@ -269,8 +324,8 @@ def plot_hl_cumulative_pnl(
             x_pass,
             [v * 100 for v in passive_cum],
             label="passive short BTC",
-            color="#7f7f7f",
-            linewidth=1.5,
+            color=_PALETTE[1],
+            linewidth=1.4,
             linestyle=":",
         )
 
@@ -279,24 +334,27 @@ def plot_hl_cumulative_pnl(
         ax.plot(
             [peak_i + 1, trough_i + 1],
             [strat_cum[peak_i] * 100, strat_cum[trough_i] * 100],
-            color="#d62728",
-            linewidth=2.5,
+            color=_PALETTE[3],
+            linewidth=2.0,
             marker="o",
-            markersize=6,
+            markersize=5,
             label=f"max drawdown ({dd_mag * 100:.2f}pp)",
         )
 
-    ax.axhline(0.0, color="black", linewidth=0.6)
-    ax.set_xlabel(f"rebalance tick (every {rebalance_hours}h)")
-    ax.set_ylabel("cumulative short-funding return (%)")
+    ax.axhline(0.0, color=_AXIS_COLOR, linewidth=0.5)
+    ax.set_xlabel(f"rebalance tick (every {rebalance_hours}h)", labelpad=8)
+    ax.set_ylabel("cumulative short-funding return (%)", labelpad=8)
     ax.set_title(
-        f"Hyperliquid funding-capture cumulative P&L "
-        f"(top-{top_k}, trailing {trailing_hours}h, rebalance {rebalance_hours}h)"
+        f"hyperliquid funding-capture cumulative p&l  "
+        f"top-{top_k}, trailing {trailing_hours}h, rebalance {rebalance_hours}h",
+        loc="left",
+        pad=12,
     )
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best", fontsize=9)
+    _style_axes(ax, grid_axis="y")
+    ax.legend(loc="best")
+    fig.tight_layout(pad=1.2)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=120, bbox_inches="tight")
+    fig.savefig(out, dpi=_SAVE_DPI, bbox_inches="tight")
     plt.close(fig)
     return out
 
@@ -340,28 +398,34 @@ def plot_funding_apr_per_coin(
     coins = [c for c, _, _ in top]
     aprs = [apr for _, apr, _ in top]
     above = [apr > BASE_RATE_FLOOR_APR_PCT for apr in aprs]
-    colors = ["#1f77b4" if hi else "#9ecae1" for hi in above]
+    # Above-floor coins: emerald (positive signal); at-or-below: slate (neutral).
+    colors = [_PALETTE[4] if hi else _PALETTE[1] for hi in above]
 
     fig, ax = plt.subplots(figsize=(9, max(4.0, 0.32 * len(coins) + 1.5)))
     y = list(range(len(coins)))
-    ax.barh(y, aprs, color=colors, edgecolor="black", linewidth=0.4)
+    ax.barh(y, aprs, color=colors, edgecolor="none", height=0.6)
     ax.set_yticks(y)
     ax.set_yticklabels(coins)
     ax.invert_yaxis()
     ax.axvline(
         BASE_RATE_FLOOR_APR_PCT,
-        color="#d62728",
-        linewidth=1.2,
+        color=_PALETTE[3],
+        linewidth=1.0,
         linestyle="--",
-        label=f"base-rate floor ({BASE_RATE_FLOOR_APR_PCT:.2f}% APR)",
+        label=f"base-rate floor ({BASE_RATE_FLOOR_APR_PCT:.2f}% apr)",
     )
-    ax.axvline(0.0, color="black", linewidth=0.6)
-    ax.set_xlabel("annualized mean funding (% APR, hourly mean * 24 * 365)")
-    ax.set_title(f"Per-coin annualized funding — top {len(coins)} by mean realized rate")
-    ax.grid(True, axis="x", alpha=0.3)
-    ax.legend(loc="lower right", fontsize=9)
+    ax.axvline(0.0, color=_AXIS_COLOR, linewidth=0.5)
+    ax.set_xlabel("annualized mean funding (% apr, hourly mean * 24 * 365)", labelpad=8)
+    ax.set_title(
+        f"per-coin annualized funding  top {len(coins)} by mean realized rate",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, grid_axis="x")
+    ax.legend(loc="lower right")
+    fig.tight_layout(pad=1.2)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=120, bbox_inches="tight")
+    fig.savefig(out, dpi=_SAVE_DPI, bbox_inches="tight")
     plt.close(fig)
     return out
 
@@ -386,30 +450,30 @@ def plot_depth_decay(
         return _save_placeholder(out, "No depth-probe results to plot.")
 
     fig, ax = plt.subplots(figsize=(11, 6))
-    palette = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#17becf",
-    ]
+    # Cycle the restrained palette starting from primary slate -> emphasis ->
+    # rose (for the "trap" event, when present).
+    line_colors = (_PALETTE[0], _PALETTE[3], _PALETTE[4], _PALETTE[2], _PALETTE[5])
 
     for idx, (name, results) in enumerate(non_empty.items()):
-        color = palette[idx % len(palette)]
+        color = line_colors[idx % len(line_colors)]
         xs = [r.notional_per_market_usd for r in results]
         ys = [r.gap_depth_aware * 10_000 for r in results]  # convert to bps
         ax.plot(
             xs,
             ys,
             marker="o",
+            markersize=4,
             color=color,
-            linewidth=2,
+            linewidth=1.8,
             label=f"{name} (depth-aware)",
         )
         top_gap_bps = results[0].gap_top_of_book * 10_000
         ax.axhline(
             top_gap_bps,
             color=color,
-            linewidth=0.9,
+            linewidth=0.8,
             linestyle="--",
-            alpha=0.55,
+            alpha=0.45,
             label=f"{name} (top-of-book = {top_gap_bps:.0f}bps)",
         )
         # Annotate the throttle market at the most-stressed (final) point.
@@ -425,17 +489,22 @@ def plot_depth_decay(
                 textcoords="offset points",
                 fontsize=8,
                 color=color,
-                arrowprops={"arrowstyle": "->", "color": color, "alpha": 0.6, "lw": 0.7},
+                arrowprops={"arrowstyle": "->", "color": color, "alpha": 0.5, "lw": 0.6},
             )
 
-    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.axhline(0.0, color=_AXIS_COLOR, linewidth=0.5)
     ax.set_xscale("log")
-    ax.set_xlabel("basket notional per market (USD, log scale)")
-    ax.set_ylabel("event-level gap (bps)")
-    ax.set_title("Depth-aware arb gap vs basket size — top-of-book is a mirage at scale")
-    ax.grid(True, which="both", alpha=0.3)
+    ax.set_xlabel("basket notional per market (usd, log scale)", labelpad=8)
+    ax.set_ylabel("event-level gap (bps)", labelpad=8)
+    ax.set_title(
+        "depth-aware arb gap vs basket size  top-of-book is a mirage at scale",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, grid_axis="y")
     ax.legend(loc="best", fontsize=8, ncol=1)
+    fig.tight_layout(pad=1.2)
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, dpi=120, bbox_inches="tight")
+    fig.savefig(out, dpi=_SAVE_DPI, bbox_inches="tight")
     plt.close(fig)
     return out

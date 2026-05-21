@@ -276,66 +276,101 @@ def _count_tests() -> int:
 _CSS = """
 :root {
   --fg: #0f172a;
-  --muted: #475569;
+  --muted: #64748b;
+  --muted-strong: #475569;
   --border: #e2e8f0;
+  --border-strong: #cbd5e1;
   --bg: #ffffff;
-  --accent: #1e293b;
+  --bg-soft: #f8fafc;
+  --accent: #0f172a;
   --pos-bg: #ecfdf5;
   --pos-fg: #047857;
-  --neg-bg: #fef2f2;
-  --neg-fg: #b91c1c;
+  --neg-bg: #fff1f2;
+  --neg-fg: #be123c;
   --neutral-bg: #fffbeb;
-  --neutral-fg: #92400e;
+  --neutral-fg: #b45309;
+  --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo,
+    Consolas, monospace;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #f8fafc; color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  line-height: 1.55; font-size: 15px; }
-.container { max-width: 900px; margin: 0 auto; padding: 48px 24px 96px; background: var(--bg); }
-h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
-h2 { font-size: 18px; margin: 40px 0 12px; letter-spacing: -0.005em;
-  padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-.subtitle { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+html, body { margin: 0; padding: 0; background: var(--bg-soft); color: var(--fg);
+  font-family: var(--sans); line-height: 1.65; font-size: 15px;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+.container { max-width: 920px; margin: 0 auto; padding: 56px 32px 96px;
+  background: var(--bg); border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border); }
+h1 { font-size: 28px; font-weight: 600; margin: 0 0 6px;
+  letter-spacing: -0.02em; line-height: 1.2; }
+h2 { font-size: 20px; font-weight: 600; margin: 44px 0 12px;
+  letter-spacing: -0.015em; line-height: 1.3;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h2:first-of-type { margin-top: 36px; }
+h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px;
+  letter-spacing: -0.01em; }
+.subtitle { color: var(--muted); margin: 0 0 28px; font-size: 13px;
+  font-family: var(--mono); letter-spacing: 0.01em; }
 p { margin: 12px 0; }
-.lead { font-size: 15px; color: var(--accent); margin-bottom: 32px; }
-.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0 8px; }
-.kpi { display: block; padding: 16px 14px; border: 1px solid var(--border);
-  border-radius: 8px; background: var(--bg); text-decoration: none; color: inherit; }
+.lead { font-size: 15.5px; color: var(--accent); margin: 0 0 32px;
+  line-height: 1.65; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+  margin: 28px 0 16px; }
+.kpi { display: block; padding: 18px 16px; border: 1px solid var(--border-strong);
+  border-radius: 6px; background: var(--bg); text-decoration: none; color: inherit;
+  transition: border-color 120ms ease, transform 120ms ease; }
 .kpi:hover { border-color: var(--accent); }
-.kpi-value { font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums; }
-.kpi-label { font-size: 12px; color: var(--muted); margin-top: 4px; text-transform: uppercase;
-  letter-spacing: 0.04em; }
-table { width: 100%; border-collapse: collapse; margin: 12px 0 4px;
-  font-size: 14px; }
-th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
-  vertical-align: top; }
-th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--muted); font-weight: 600; background: #f8fafc; }
-td.num, th.num { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo,
-  Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.cell-pos { background: var(--pos-bg); color: var(--pos-fg); font-weight: 600; }
-.cell-neg { background: var(--neg-bg); color: var(--neg-fg); font-weight: 600; }
-.cell-neutral { background: var(--neutral-bg); color: var(--neutral-fg); font-weight: 600; }
-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.92em; background: #f1f5f9; padding: 1px 5px; border-radius: 3px; }
-.chart { margin: 16px 0 24px; padding: 0; }
-.chart img { display: block; max-width: 100%; height: auto; border: 1px solid var(--border);
-  border-radius: 6px; }
-.chart figcaption { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-.missing { padding: 24px; background: #f8fafc; border: 1px dashed var(--border);
+.kpi-value { font-family: var(--mono); font-size: 22px; font-weight: 600;
+  letter-spacing: -0.01em; font-variant-numeric: tabular-nums;
+  color: var(--fg); line-height: 1.15; }
+.kpi-label { font-size: 11px; color: var(--muted); margin-top: 8px;
+  text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500;
+  line-height: 1.35; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0 8px;
+  font-size: 14px; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 12px; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--border); }
+thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 600; background: transparent;
+  border-bottom: 1px solid var(--border-strong); padding-bottom: 8px; }
+tbody tr:last-child td { border-bottom: 1px solid var(--border-strong); }
+td.num, th.num { text-align: right; font-family: var(--mono);
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cell-pos { background: var(--pos-bg); color: var(--pos-fg); font-weight: 600;
+  border-radius: 3px; }
+.cell-neg { background: var(--neg-bg); color: var(--neg-fg); font-weight: 600;
+  border-radius: 3px; }
+.cell-neutral { background: var(--neutral-bg); color: var(--neutral-fg);
+  font-weight: 600; border-radius: 3px; }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--bg-soft);
+  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
+  color: var(--accent); }
+.chart { margin: 16px 0 28px; padding: 0; }
+.chart img { display: block; max-width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.chart figcaption { font-size: 12px; color: var(--muted); margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
+.missing { padding: 28px; background: var(--bg-soft); border: 1px dashed var(--border-strong);
   border-radius: 6px; color: var(--muted); font-size: 13px; text-align: center; }
 .muted { color: var(--muted); }
-a { color: #1d4ed8; }
+.limitations { font-size: 13.5px; color: var(--muted-strong); line-height: 1.6; }
+.limitations h2 { color: var(--muted-strong); }
+a { color: #1d4ed8; text-decoration: none; }
 a:hover { text-decoration: underline; }
-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--muted); }
+footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); line-height: 1.6; font-family: var(--mono); }
+footer a { color: var(--muted); }
 @media (max-width: 720px) {
-  .container { padding: 24px 16px 64px; }
-  .kpis { grid-template-columns: repeat(2, 1fr); }
+  .container { padding: 32px 18px 72px; border-left: 0; border-right: 0; }
+  h1 { font-size: 24px; }
+  h2 { font-size: 18px; margin-top: 36px; }
   table { font-size: 13px; }
-  th, td { padding: 6px 8px; }
+  th, td { padding: 7px 8px; }
+}
+@media (max-width: 600px) {
+  .kpis { grid-template-columns: 1fr; }
+  .kpi { padding: 14px 14px; }
+  .kpi-value { font-size: 20px; }
 }
 """.strip()
 
@@ -391,17 +426,19 @@ def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
   becomes -200% net; the cadence at which net annualized first crosses zero is highlighted.</p>
   {hedge_table}
 
-  <h2>Limitations</h2>
-  <p>Every headline number above is gross of execution cost on the Hyperliquid side and
-  top-of-book on the Polymarket side. The full self-audit lives in
-  <code>REDTEAM.md</code>; the shippable-recipe framing for Ask Gina lives in
-  <code>RECIPES.md</code>. Sample size on the Hyperliquid backtest is 30 days
-  (~56 rebalances) — Sharpe confidence intervals are wide, and listing/delisting
-  survivorship is uncorrected.</p>
+  <section class="limitations">
+    <h2>Limitations</h2>
+    <p>Every headline number above is gross of execution cost on the Hyperliquid side and
+    top-of-book on the Polymarket side. The full self-audit lives in
+    <code>REDTEAM.md</code>; the shippable-recipe framing for Ask Gina lives in
+    <code>RECIPES.md</code>. Sample size on the Hyperliquid backtest is 30 days
+    (~56 rebalances) &mdash; Sharpe confidence intervals are wide, and listing/delisting
+    survivorship is uncorrected.</p>
+  </section>
 
   <footer>
-    Self-contained single-file dashboard &middot; no external assets &middot;
-    portable across email, static hosts, and offline review.
+    Built by Harry Winter &middot; github.com/harrywinter06-code/polymarket-edge &middot;
+    view source for the README, REDTEAM, RECIPES, MICROSTRUCTURE.
   </footer>
 </main>
 </body>

@@ -17,11 +17,13 @@ from polymarket_edge import (
     hl_backtest,
     hl_stats,
     hl_stats_block,
+    hl_tail,
     hyperliquid,
     microstructure,
     monitor,
     paper,
     report,
+    trap_classifier,
     walkforward,
 )
 
@@ -570,6 +572,79 @@ def microstructure_scan_cmd(
             f"  {cat:20}  total={total}  trap={counts.get('trap', 0)}  "
             f"trap_rate={trap_rate:.1%}"
         )
+
+
+@app.command("hl-tail")
+def hl_tail_cmd(
+    db_path: Path = DEFAULT_DB,
+    top_k: int = typer.Option(5),
+    trailing_hours: int = typer.Option(24),
+    rebalance_hours: int = typer.Option(8),
+    spread_bps_per_leg: float = typer.Option(0.0, help="Net P&L when >0"),
+) -> None:
+    """Tail risk: VaR_95, VaR_99, Expected Shortfall, drawdown distribution."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+    returns = hl_stats.compute_per_period_returns_trailing(
+        ticks, top_k=top_k, trailing_hours=trailing_hours, rebalance_hours=rebalance_hours,
+    )
+    if spread_bps_per_leg > 0:
+        cost = 4 * spread_bps_per_leg / 10_000
+        returns = [r - cost for r in returns]
+    t = hl_tail.tail_stats(returns, hours_per_period=rebalance_hours)
+    label = f"top-{top_k} trail-{trailing_hours}h rebal-{rebalance_hours}h"
+    if spread_bps_per_leg > 0:
+        label += f" net of {spread_bps_per_leg}bp/leg"
+    typer.echo(f"strategy: {label}")
+    typer.echo(f"  n_periods={t.n_periods}  ann_ret={t.annualized_return:+.4f}")
+    typer.echo(f"  VaR_95={t.var_95:+.6f}  VaR_99={t.var_99:+.6f}")
+    typer.echo(f"  ES_95 ={t.expected_shortfall_95:+.6f}  ES_99 ={t.expected_shortfall_99:+.6f}")
+    typer.echo(
+        f"  max_drawdown={t.max_drawdown:.6f}  "
+        f"max_dd_periods={t.max_drawdown_periods}  "
+        f"dd_recovery_periods={t.drawdown_recovery_periods}  "
+        f"periods_in_dd={t.n_drawdown_periods}"
+    )
+    typer.echo(
+        f"  worst_period={t.worst_period_return:+.6f}  best_period={t.best_period_return:+.6f}"
+    )
+
+
+@app.command("trap-predict")
+def trap_predict_cmd(
+    db_path: Path = DEFAULT_DB,
+    scan_id: str = typer.Option("", help="Specific scan_id; blank = latest"),
+) -> None:
+    """Train the trap classifier on the latest microstructure scan and report LOOCV AUC."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    rows = trap_classifier.load_classifications_from_db(
+        conn, scan_id=scan_id or None
+    )
+    if not rows:
+        typer.echo("no microstructure_classifications rows; run `microstructure-scan` first")
+        raise typer.Exit(1)
+    features = [trap_classifier.featurize(r) for r in rows]
+    labels = [1 if r["verdict"] == "trap" else 0 for r in rows]
+    res = trap_classifier.leave_one_out_cv(features, labels)
+    typer.echo(
+        f"n={res.n_samples}  n_traps={res.n_traps}  "
+        f"base_rate={res.n_traps / res.n_samples:.3f}"
+    )
+    typer.echo(
+        f"LOOCV AUC={res.auc:.3f}  accuracy@p=0.5={res.accuracy_at_threshold_05:.3f}"
+    )
+    typer.echo(
+        f"confusion: TP={res.confusion['tp']} FP={res.confusion['fp']} "
+        f"TN={res.confusion['tn']} FN={res.confusion['fn']}"
+    )
+    typer.echo("feature coefficients (descending |coef|):")
+    for name, coef in res.feature_importance_ordered:
+        typer.echo(f"  {name:24}  {coef:+.4f}")
 
 
 @app.command("dashboard")
