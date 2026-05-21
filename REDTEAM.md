@@ -137,3 +137,20 @@ A churn-aware variant (only charge spread on the *changed* leg between rebalance
 - **Code**: three real bug fixes (2a, 2b, 2c) with new test coverage where the math changed.
 
 A normal undergrad project ships at the first green test suite. This document is the difference.
+
+## 5. Fourth-pass red-team (post-publish to GitHub)
+
+After the repo was public, ran another audit pass against the live state. Findings:
+
+**5a. Build-window depth findings need timestamp framing — FIXED in narrative.**
+The "Polymarket flagged three live events" framing in the README implicitly invited the reader to reproduce all three findings against current state. Re-running the depth analysis 18 hours after the original capture: the World Cup leg still holds (+144bp at $1K/market, was +150bp; Iran throttles at $2.8K, was $3.0K — small drift), but **the Weinstein and Election gaps both compressed below the 50bp detector threshold** and no longer flag. The depth findings were valid for the moment they were captured (the math is correct), but they read as "live now" rather than "build-window snapshots." The README now frames the three depth cases as "captured 2026-05-21" with an explicit note that the World Cup is the durable example.
+
+**5b. `cross_venue.align_series` has a units foot-gun — FIXED.**
+The function takes PM timestamps in seconds and HL timestamps in milliseconds. This is documented in the docstring but easy to call wrong — a self-audit script feeding both legs in ms got back exactly one aligned bucket and all-NaN correlations, which mimics a "broken function" but was actually a caller bug. Added explicit `_validate_timestamp_units` validation at function entry that raises `ValueError` with a clear message if the timestamp magnitudes look wrong (boundary at 1e11, comfortably between any plausible "now" in either unit). New tests `test_align_series_rejects_wrong_pm_unit` / `test_align_series_rejects_wrong_hl_unit` lock the validation behavior.
+
+**5c. Persistence study ran successfully — DOCUMENTED.**
+After the earlier two OOMs, a third monitor run with tight bounds (`max_events_per_poll=30`, `poll_interval=120s`, `duration=25min`) completed cleanly: 13 polls, 52 trajectories on 4 distinct flagged events. Mean |gap| = 1.4%, p90 = 3.2%. The forward-test mean decay-toward-zero over a 5-minute hold rounded to 0.0000 — gaps **persisted** during the observation window. This is a small sample (4 events, 25 minutes) but it's the first real persistence data the project has; the README's persistence section now cites these numbers rather than saying "the monitor died."
+
+**5d. Repo is clean.** Confirmed via `gh api`: no DB file, no credentials, no .env, no shm/wal files on GitHub. License field is null — fine for a one-author portfolio project but worth noting if Harry wants to ever accept external contributions.
+
+**5e. Dashboard hardcodes the depth-vs-trap row labels.** Per spec, the agent embedded "World Cup / Election / Weinstein" as static text. Accurate for the captured snapshot, but the same drift caveat applies — the dashboard is a frozen build-window artifact, which is the right framing for a portfolio piece. Not a fix; flagged for transparency.

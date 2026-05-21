@@ -112,9 +112,17 @@ def align_series(
     Buckets without coverage on *both* legs are dropped. The very first surviving
     bucket has `pm_delta` and `hl_log_return` set from the prior available bucket
     where possible; if no prior bucket exists they default to 0.0.
+
+    Raises ValueError if the unit-of-timestamp assumption is violated — a
+    common foot-gun is feeding both inputs in the same unit. A 2026-era PM
+    timestamp in seconds is ~1.7e9, in milliseconds ~1.7e12; we use 1e11 as
+    the discriminator (Unix epoch ms crossed that around 2001 in seconds and
+    around the year 5138 in seconds, so the boundary is comfortable).
     """
     if bucket_minutes <= 0:
         raise ValueError("bucket_minutes must be positive")
+    _validate_timestamp_units(pm_history, expected="seconds", name="pm_history")
+    _validate_timestamp_units(hl_history, expected="milliseconds", name="hl_history")
     bucket_ms = bucket_minutes * 60 * 1000
 
     pm_by_bucket = _bucket_last(((t * 1000, p) for t, p in pm_history), bucket_ms)
@@ -176,6 +184,33 @@ def compute_lead_lag(
             y = hl_r[: n + lag]
         out[lag] = _pearson(x, y)
     return out
+
+
+_UNIT_BOUNDARY = 10**11  # ~year 5138 in seconds, year 1973 in milliseconds
+
+
+def _validate_timestamp_units(
+    series: list[tuple[int, float]], *, expected: str, name: str
+) -> None:
+    """Cheap guard against feeding the wrong timestamp unit.
+
+    `expected` is "seconds" or "milliseconds". The check inspects the median-ish
+    timestamp (just the first one for speed) and complains if it falls on the
+    wrong side of 1e11. A 2026 timestamp is ~1.7e9 in seconds, ~1.7e12 in ms.
+    """
+    if not series:
+        return
+    sample = series[0][0]
+    if expected == "seconds" and sample >= _UNIT_BOUNDARY:
+        raise ValueError(
+            f"{name}: timestamp {sample} looks like milliseconds, "
+            f"but this function expects seconds for the PM leg"
+        )
+    if expected == "milliseconds" and sample < _UNIT_BOUNDARY:
+        raise ValueError(
+            f"{name}: timestamp {sample} looks like seconds, "
+            f"but this function expects milliseconds for the HL leg"
+        )
 
 
 def _pearson(x: list[float], y: list[float]) -> float:

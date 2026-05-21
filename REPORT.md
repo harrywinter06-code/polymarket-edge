@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-21 23:04
+Generated: 2026-05-21 23:29
 
 ## What we built and why
 
@@ -24,7 +24,7 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 | markets | 1,440 |
 | market_snapshots | 1,440 |
 | event_arb_signals | 36 |
-| signal_trajectories | 748 |
+| signal_trajectories | 772 |
 | hl_funding_history | 18,500 |
 | paper_positions | 11 |
 

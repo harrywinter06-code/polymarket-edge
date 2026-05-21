@@ -19,7 +19,7 @@ The scanner ingests every active event from the gamma API, scores every `negRisk
 
 ## Results (with sensitivity)
 
-**Polymarket — live snapshot, depth-aware (build window).** Across 100 active events / 1,440 markets / 18 `negRisk` events scored, three real microstructure deviations at the 50bp threshold — but **only one of them actually trades**:
+**Polymarket — depth-aware case studies, captured 2026-05-21.** Across 100 active events / 1,440 markets / 18 `negRisk` events scored on the build-window snapshot, three real microstructure deviations at the 50bp threshold — but **only one of them actually trades**:
 
 | event | n_mkts | top-of-book gap | gap at $1K/mkt | tradeable? |
 |---|---|---|---|---|
@@ -28,6 +28,8 @@ The scanner ingests every active event from the gamma API, scores every `negRisk
 | Harvey Weinstein sentencing | 6 | +80bp sell | **−1,040bp at $50/mkt** | **TRAP** — one market has $7.83 total bid depth |
 
 This is the core finding of the project. A top-of-book gap detector flags all three. A *depth-aware* basket model — `book_depth.py`, which walks each market's full `/book` and computes the basket-trade average fill — separates the real signal (World Cup, executable at meaningful size and clearing the 0.75% Sports taker fee) from the marginal one (Election, fee-clearable only at retail size) from the trap (Weinstein, where the naïve top-of-book reading would lose money instantly).
+
+**These three cases are moment-in-time depth analyses.** Top-of-book gaps shift hourly with market activity. As of a re-snapshot 18 hours after the original capture, the World Cup leg still holds at +144bp at $1K/market (Iran throttles at $2.8K); the Weinstein and Election gaps have both compressed below the detector's 50bp threshold. The World Cup case is the durable one; Weinstein/Election are the *kind* of patterns the detector + depth model surface, captured for the writeup at the moment they were flagged. Run `polymarket-edge depth <slug>` to verify against current state.
 
 **Hyperliquid — GROSS backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
 
@@ -68,7 +70,7 @@ This is the honest answer to the question "what's the Sharpe really?": **depends
 - **Polymarket detector** treats `negRisk: true` as mutually exclusive *and* exhaustive. The `negRiskOther` market breaks exhaustivity; the detector records its presence but does not adjust the sum constraint. `negRiskAugmented: true` events (e.g. the World Cup, 2028 Election) allow new outcomes to be added mid-event, softening the strict sum=1 bound. Weinstein is NOT augmented, so its 80bp signal is structurally cleaner than the World Cup's 150bp.
 - **Fee model.** Polymarket fees are per-category and probability-curved (peaked at 50%), not the flat 2% I initially assumed. Sports 0.75%, Politics 1.0%, Geopolitical 0%, Culture ~1.25%, Crypto 1.8%, Makers 0% + 20-25% rebate. The "fee-clearable" column above is taker-side; maker-only execution clears all listed gaps.
 - **Detector vs depth.** The event-level `detector` reads top-of-book only — useful for flagging candidates, but it cannot tell a real signal from a trap. The `book_depth` module is what makes the signal actionable; the depth pass is mandatory before any size sizing.
-- **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap (and was supposed to run for hours during the build; ran into a host-side virtual-memory limit — see REDTEAM.md item 2d).
+- **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap. Best run so far: **52 trajectories over 13 polls / 25 minutes** on 4 distinct flagged events (after several earlier runs OOMed on the host page file). Mean `|gap|` = 1.4%, p90 = 3.2%, max 3.2%. The decay-toward-zero over a 5-minute hold averaged effectively zero — the flagged gaps **persisted** during the observation window rather than decaying away, which is what you'd want for tradeability but it's a 25-minute / 4-event sample, not strong evidence. A multi-day run on a host with more virtual memory would settle it.
 - **Hyperliquid backtest** had hedge-leg cost modeled in a follow-on pass (`hl_hedge.py`): at 5 bps per leg (20 bps round-trip) the headline +19% becomes **−200% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. Salvageable only at weekly+ rebalance. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
 - **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
 - **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.

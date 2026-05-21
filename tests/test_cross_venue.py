@@ -96,6 +96,28 @@ def test_compute_lead_lag_handles_perfect_correlation() -> None:
     assert finite.get(-1, 0.0) < 0.99
 
 
+def test_align_series_rejects_wrong_pm_unit() -> None:
+    """PM timestamps in milliseconds (instead of seconds) must raise ValueError —
+    a real foot-gun discovered during a red-team pass."""
+    import pytest
+
+    # 2026 timestamps in milliseconds — wrong for PM (should be seconds).
+    pm_wrong = [(1_767_225_600_000 + i * BUCKET_MS, 0.5) for i in range(3)]
+    hl_ok = [(1_767_225_600_000 + i * BUCKET_MS, 100.0) for i in range(3)]
+    with pytest.raises(ValueError, match="looks like milliseconds"):
+        align_series(pm_wrong, hl_ok)
+
+
+def test_align_series_rejects_wrong_hl_unit() -> None:
+    """HL timestamps in seconds (instead of milliseconds) must raise ValueError."""
+    import pytest
+
+    pm_ok = [(1_767_225_600 + i * 43200, 0.5) for i in range(3)]
+    hl_wrong = [(1_767_225_600 + i * 43200, 100.0) for i in range(3)]
+    with pytest.raises(ValueError, match="looks like seconds"):
+        align_series(pm_ok, hl_wrong)
+
+
 def test_compute_lead_lag_returns_zero_for_independent() -> None:
     """Two independent random series with fixed seed should have max |r| under
     a loose bound. 100 rows of N(0,1) draws have a standard error on r of about
