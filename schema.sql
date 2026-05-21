@@ -171,3 +171,29 @@ CREATE TABLE IF NOT EXISTS cross_venue_aligned (
 CREATE INDEX IF NOT EXISTS idx_cv_pair_time
     ON cross_venue_aligned(pm_token_id, hl_coin, t_ms);
 
+-- ---------- depth-aware trap-rate classification (microstructure scan) ----------
+
+CREATE TABLE IF NOT EXISTS microstructure_classifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL,             -- one per scan_and_classify run
+    event_id TEXT NOT NULL,
+    event_slug TEXT,
+    event_title TEXT,
+    category_tag TEXT NOT NULL,
+    n_markets INTEGER NOT NULL,
+    neg_risk_augmented INTEGER NOT NULL,
+    direction TEXT NOT NULL,           -- 'sell_yes' | 'buy_yes'
+    top_of_book_gap REAL NOT NULL,
+    gap_at_small_size REAL NOT NULL,
+    gap_at_med_size REAL NOT NULL,
+    throttle_notional_usd REAL NOT NULL,
+    verdict TEXT NOT NULL,             -- 'real' | 'marginal' | 'trap' | 'noise'
+    classified_at TEXT NOT NULL
+    -- no FK on event_id: this table records research output across scan windows;
+    -- the parent events row may not be ingested by the time a scan runs.
+);
+
+CREATE INDEX IF NOT EXISTS idx_micro_scan ON microstructure_classifications(scan_id);
+CREATE INDEX IF NOT EXISTS idx_micro_verdict_cat
+    ON microstructure_classifications(verdict, category_tag);
+

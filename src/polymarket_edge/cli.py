@@ -16,10 +16,13 @@ from polymarket_edge import (
     fetch,
     hl_backtest,
     hl_stats,
+    hl_stats_block,
     hyperliquid,
+    microstructure,
     monitor,
     paper,
     report,
+    walkforward,
 )
 
 app = typer.Typer(add_completion=False, help="Polymarket event-level edge scanner")
@@ -445,6 +448,128 @@ def report_cmd(
     db.init_schema(conn)
     p = report.write_report(conn, out)
     typer.echo(f"wrote {p}")
+
+
+@app.command("walk-forward")
+def walk_forward_cmd(
+    db_path: Path = DEFAULT_DB,
+    train_days: int = typer.Option(10),
+    test_days: int = typer.Option(5),
+    step_days: int = typer.Option(3),
+    top_k: int = typer.Option(5),
+    trailing_hours: int = typer.Option(24),
+    rebalance_hours: int = typer.Option(8),
+) -> None:
+    """Walk-forward (out-of-sample) backtest. Default config fits the ~20-day
+    common grid on the live DB; the README's nominal 15/7 needs ~22 days."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+    r = walkforward.walk_forward_top_k_trailing(
+        ticks,
+        train_days=train_days,
+        test_days=test_days,
+        step_days=step_days,
+        top_k=top_k,
+        trailing_hours=trailing_hours,
+        rebalance_hours=rebalance_hours,
+    )
+    typer.echo(
+        f"strategy: {r.strategy}  windows={r.n_windows}  "
+        f"IS mean ann={r.in_sample_ann_ret_mean:+.4f}  "
+        f"OOS mean ann={r.out_of_sample_ann_ret_mean:+.4f}  "
+        f"decay (IS-OOS, pp)={r.is_oos_decay_pp:+.4f}"
+    )
+    for w in r.windows:
+        typer.echo(
+            f"  train={w.n_train_periods}p test={w.n_test_periods}p  "
+            f"IS={w.in_sample_annualized:+.4f}  OOS={w.out_of_sample_annualized:+.4f}  "
+            f"IS_Sharpe={w.in_sample_sharpe:+.2f}  OOS_Sharpe={w.out_of_sample_sharpe:+.2f}  "
+            f"carried={w.coins_carried_to_test}/{w.coins_held_in_train}"
+        )
+
+
+@app.command("hl-ci-block")
+def hl_ci_block_cmd(
+    db_path: Path = DEFAULT_DB,
+    top_k: int = typer.Option(5),
+    trailing_hours: int = typer.Option(24),
+    rebalance_hours: int = typer.Option(8),
+    n_resamples: int = typer.Option(5000),
+) -> None:
+    """Block-bootstrap 95% CI (preserves funding autocorrelation)."""
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+    returns = hl_stats.compute_per_period_returns_trailing(
+        ticks, top_k=top_k, trailing_hours=trailing_hours, rebalance_hours=rebalance_hours,
+    )
+    block_len = hl_stats_block.estimate_optimal_block_length(returns)
+    iid = hl_stats.bootstrap_backtest_stats(
+        returns, hours_per_period=rebalance_hours, n_resamples=n_resamples
+    )
+    mb = hl_stats_block.moving_block_bootstrap(
+        returns, hours_per_period=rebalance_hours,
+        block_length=block_len, n_resamples=n_resamples,
+    )
+    sb = hl_stats_block.stationary_bootstrap(
+        returns, hours_per_period=rebalance_hours,
+        block_length=float(block_len), n_resamples=n_resamples,
+    )
+    typer.echo(
+        f"n_periods={len(returns)}  optimal_block_length={block_len}"
+    )
+    for label, s in (("IID", iid), ("moving-block", mb), ("stationary", sb)):
+        ar = s.annualized_return
+        sh = s.sharpe
+        typer.echo(
+            f"  {label:13}  ann={ar.point:+.4f} CI[{ar.ci_low:+.4f},{ar.ci_high:+.4f}]  "
+            f"sharpe={sh.point:+.2f} CI[{sh.ci_low:+.2f},{sh.ci_high:+.2f}]"
+        )
+
+
+@app.command("microstructure-scan")
+def microstructure_scan_cmd(
+    db_path: Path = DEFAULT_DB,
+    max_events: int = typer.Option(500),
+    small_size_usd: float = typer.Option(50.0),
+    med_size_usd: float = typer.Option(500.0),
+    fee_buffer: float = typer.Option(0.005),
+) -> None:
+    """Scan all currently-active negRisk events and classify each as
+    real / marginal / trap by depth-aware basket P&L."""
+    classifications = asyncio.run(
+        microstructure.scan_and_classify(
+            max_events=max_events,
+            small_size_usd=small_size_usd,
+            med_size_usd=med_size_usd,
+            fee_buffer=fee_buffer,
+        )
+    )
+    by_cat = microstructure.aggregate_by_category(classifications)
+    n = len(classifications)
+    if n == 0:
+        typer.echo("no flagged events")
+        return
+    traps = sum(1 for c in classifications if c.verdict == "trap")
+    reals = sum(1 for c in classifications if c.verdict == "real")
+    marginals = sum(1 for c in classifications if c.verdict == "marginal")
+    typer.echo(f"flagged={n}  real={reals}  marginal={marginals}  trap={traps}")
+    typer.echo(f"trap_rate={traps / n:.1%}")
+    typer.echo("by category:")
+    for cat, counts in sorted(by_cat.items(), key=lambda kv: -sum(kv[1].values())):
+        total = sum(counts.values())
+        trap_rate = counts.get("trap", 0) / total if total else 0.0
+        typer.echo(
+            f"  {cat:20}  total={total}  trap={counts.get('trap', 0)}  "
+            f"trap_rate={trap_rate:.1%}"
+        )
 
 
 @app.command("dashboard")

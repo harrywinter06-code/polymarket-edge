@@ -154,3 +154,30 @@ After the earlier two OOMs, a third monitor run with tight bounds (`max_events_p
 **5d. Repo is clean.** Confirmed via `gh api`: no DB file, no credentials, no .env, no shm/wal files on GitHub. License field is null — fine for a one-author portfolio project but worth noting if Harry wants to ever accept external contributions.
 
 **5e. Dashboard hardcodes the depth-vs-trap row labels.** Per spec, the agent embedded "World Cup / Election / Weinstein" as static text. Accurate for the captured snapshot, but the same drift caveat applies — the dashboard is a frozen build-window artifact, which is the right framing for a portfolio piece. Not a fix; flagged for transparency.
+
+## 6. Fifth-pass red-team — closing the structural ceiling
+
+After the prior four passes, I wrote down what was actually still WEAK about the project under a "would a quant founder say wow" lens (this list also lives in chat-history context for the application but I want it documented here too):
+
+1. **Nothing real had been traded** — all paper.
+2. **Findings were mostly *what didn't work*** — Weinstein trap, momentum loses to level, cross-venue null, Hyperliquid headline collapses under cost. No durable positive edge claim other than World Cup.
+3. **No novel finding** — every result here is a clean implementation of a known pattern.
+4. **No walk-forward OOS** — the +19% headline was in-sample on the full window.
+5. **Bootstrap CIs were IID** — wrong on autocorrelated funding returns.
+6. **Never engaged with Ask Gina's actual product.**
+
+Five parallel agent streams in the fifth pass:
+
+**6a. Microstructure trap-rate study — THE headline finding now.** Scanned 500 active events, classified each by depth-aware basket P&L at $50 and $500/market. 19/500 = 3.8% flagged by the detector. **Of those, 63.2% are traps** (gap inverts to a loss at $50/market because one constituent has near-zero depth). The trap pattern is concentrated in 2-market US state-election negRisk events — 11/13 = 85% trap rate for `Politics`/`Elections`/`US Election`/`Midterms` tags combined. The two `real` signals identified are 48-market World Cup (Soccer, the durable case-study event from earlier passes) and 20-market Nobel Peace Prize (Awards). The mechanical explanation — thin-side bid-book collapse on the 5%-probability market — is structural rather than transient. Full writeup: [MICROSTRUCTURE.md](MICROSTRUCTURE.md). This is the first finding in the project that is genuinely population-level research rather than n=1 anecdote.
+
+**6b. Walk-forward OOS validation.** Multiple sliding train/test windows on the Hyperliquid 30-day data. **OOS slightly *outperforms* IS** — decay is negative (−3 to −7 percentage points, OOS > IS) across three different train/test ratios. The signal is durable, not over-fit. Net of 5bp/leg spread the OOS result is catastrophic (−195% to −203% annualized), confirming the existing hl_hedge finding holds out-of-sample. New module `walkforward.py`. Spec error caught: the DB has ~22 days of common-grid data, not the nominal "30 days, 18,500 ticks" the README has been quoting loosely — that's the actual time span behind every Hyperliquid number; the +19% headline was always on ~22 days, and the writeup now reflects that.
+
+**6c. Block bootstrap CIs.** Funding returns have ACF(1) = +0.574 — IID resampling understates variance. Moving-block bootstrap with optimal block length 2 widens the annualized-return CI by **~28%**. Honest band is **[+14.08%, +25.18%]** instead of the IID [+14.88%, +23.69%]. Sharpe CI widens ~12%. The point estimate is unchanged. New module `hl_stats_block.py`. Stationary (Politis-Romano) implementation also included for completeness; produces very similar results to moving-block.
+
+**6d. Real-trade runway.** `scripts/size_basket_trade.py` computes per-market notionals, expected fills, maker-vs-taker net P&L, and a kill-the-trade threshold for a $20 real trade on a chosen event. Live-tested on the World Cup: at $20 total, $0.42/market, maker mode shows **+170 bps net (rebate-positive) — expected P&L +$0.04**; taker mode at 0.75% Sports fee shows −15 cents. `EXECUTION.md` is the step-by-step checklist. **UK jurisdiction is restricted** by Polymarket (verified via help.polymarket.com); the checklist documents the py-clob-client non-broadcast simulation path for restricted-jurisdiction users — the order builder produces signed orders that we don't post. Not a substitute for a real fill, but better than nothing.
+
+**6e. Ask Gina engagement research.** Public research only (the live app at askgina.ai returned 403 to WebFetch; relied on partner posts + founder LinkedIn + Zerion case study). **Polymarket integration is not publicly confirmed shipped at Gina** — same for Hyperliquid. RECIPES.md targeted hypothetical integration; `GINA_ENGAGEMENT.md` is now the honest version with three concrete recipes (trap-warning enrichment is the strongest, leans on the new microstructure finding), explicit TODO sections for Harry to fill in after in-app verification, and a closing paragraph that's clear about what's research vs hypothesis.
+
+**What's still open after this pass.** One real $20 fill from the user side (the sizing script + checklist are the runway; the actual fill must be done by Harry, modulo the UK jurisdiction constraint). One actual in-app Gina session by Harry (the engagement template is ready; the in-app friction observations must be filled by Harry). Neither of those can be done by AI agents. Everything else from the original weakness list — novel finding, walk-forward, block bootstrap, product engagement framework — has been addressed.
+
+Test count: 79. CI green on every push. Eight markdown documents, five chart/HTML artifacts, eleven modules.

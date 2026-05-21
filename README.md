@@ -4,7 +4,7 @@
 
 Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application.
 
-A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md). A cross-venue case study (Fed-rate-cuts Polymarket market vs BTC perp funding, null result, rigorous method) lives in [CROSSVENUE.md](CROSSVENUE.md). A single-file [`dashboard.html`](dashboard.html) renders the headline numbers and charts in a browser without external dependencies.
+A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md) and [GINA_ENGAGEMENT.md](GINA_ENGAGEMENT.md). A cross-venue case study (Fed-rate-cuts Polymarket market vs BTC perp funding, null result, rigorous method) lives in [CROSSVENUE.md](CROSSVENUE.md). **The headline empirical finding — that 63% of detector-flagged negRisk events are unprofitable traps, concentrated in 2-market US state-election races at 85% trap rate — lives in [MICROSTRUCTURE.md](MICROSTRUCTURE.md).** A single-file [`dashboard.html`](dashboard.html) renders the headline numbers and charts in a browser without external dependencies. [`EXECUTION.md`](EXECUTION.md) documents the runway for a real $20 trade including the UK-jurisdiction non-broadcast simulation path.
 
 ## What it does
 
@@ -18,6 +18,31 @@ The scanner ingests every active event from the gamma API, scores every `negRisk
 **Hyperliquid leg.** The info endpoint exposes hourly funding per perpetual and an unconstrained historical series via `fundingHistory`. The backtest tests a top-K trailing-window funding-capture strategy: at each rebalance tick, rank coins by trailing-mean funding, short the top K (equal-weight), realize the actual funding flow over the next interval. Benchmarks: perfect-hindsight (look-ahead top-K) and passive-short on a chosen coin.
 
 ## Results (with sensitivity)
+
+## Polymarket microstructure — the trap rate of detector-flagged events
+
+Scanned 500 active Polymarket events; the top-of-book event-level no-arb detector flagged **19** at a 50bp fee buffer. The depth-aware classifier (`microstructure.py`) walks the full `/book` on every market in the flagged direction at $50 and $500/market and classifies each event:
+
+| verdict | count | share |
+|---|---|---|
+| real (clears 50bp at $500/market) | 2 | **10.5%** |
+| marginal (clears at $50, decays into fee buffer by $500) | 5 | 26.3% |
+| **trap (gap inverts to a loss at $50/market)** | **12** | **63.2%** |
+
+**The pattern: traps concentrate in 2-market US state-election negRisk events.**
+
+| category | total flagged | trap | trap rate |
+|---|---|---|---|
+| Politics | 6 | 5 | **83.3%** |
+| Elections | 4 | 3 | **75.0%** |
+| US Election | 3 | 3 | **100%** |
+| Midterms | 2 | 1 | 50.0% |
+| Soccer | 1 | 0 | 0% |
+| Awards | 1 | 0 | 0% |
+
+Mechanical explanation: a 2-market state race (e.g. governor's seat: Democrat vs Republican) has one market at ~5% probability whose entire bid book is single-digit dollars. The detector reads `bestBid(5%-side) + bestBid(95%-side) = 1.01` and flags +100bp sell-side, but at any meaningful basket size the thin side's book collapses and the basket walks to a deep loss. The detector flags exactly the events that are LEAST tradeable. The two `real` signals were 48-market World Cup (Soccer) and 20-market Nobel Peace Prize (Awards) — both events with liquidity spread across many legs.
+
+**Practical takeaway for any prediction-market quant:** the depth-walking pass is non-optional before sizing. A top-of-book scanner sized in proportion to gap trades 63% traps. Full method + caveats + the binary-classification jitter discussion in [MICROSTRUCTURE.md](MICROSTRUCTURE.md).
 
 **Polymarket — depth-aware case studies, captured 2026-05-21.** Across 100 active events / 1,440 markets / 18 `negRisk` events scored on the build-window snapshot, three real microstructure deviations at the 50bp threshold — but **only one of them actually trades**:
 
@@ -43,11 +68,25 @@ This is the core finding of the project. A top-of-book gap detector flags all th
 
 Gross decomposition of the +19.0% top-5: ~11.0% comes from the base-rate funding floor (interest-rate component, ~10.95% APR — any coin near zero premium pays shorts this passively). The remaining ~8.0 percentage points are the selection excess from the trailing-mean predictor. The trailing-24h variant recovers ~85% of the perfect-hindsight K=5 ceiling.
 
-**Bootstrap 95% CI on the headline (5000 resamples, N=56 rebalances):**
-- Annualized return: **+19.03% [point], 95% CI [+14.88%, +23.69%]**
-- Sharpe: +36.98 [point], 95% CI [+30.24, +52.83] — wide and right-skewed (small-N artifact)
+**Bootstrap 95% CI on the headline (N=56 rebalances):**
 
-The lower bound on annualized return is +14.9%, not +19% — the founder-defensible claim. Run via `polymarket-edge hl-ci`.
+| method | annualized return CI | Sharpe CI |
+|---|---|---|
+| IID (naive) | [+14.88%, +23.69%] | [+30.24, +52.83] |
+| **Moving-block (optimal block=2)** | **[+14.08%, +25.18%]** | [+30.38, +55.20] |
+| Stationary bootstrap | [+13.92%, +25.35%] | [+30.37, +56.30] |
+
+Funding returns are autocorrelated (ACF(1) = +0.574) — IID resampling under-states the variance. Block bootstrap widens the annualized-return CI by **~28%** and the Sharpe CI by ~12%. The honest defensible band is **[+14.1%, +25.2%]**, not the IID [+14.9%, +23.7%]. Run via `polymarket-edge hl-ci-block`.
+
+**Walk-forward (out-of-sample) validation, train=10d/test=5d/step=3d:** *the OOS result slightly OUTPERFORMS in-sample.*
+
+| config | n windows | IS mean ann ret | OOS mean ann ret | decay (IS − OOS) |
+|---|---|---|---|---|
+| train=10, test=5, step=3 | 2 | +14.27% / +20.17% | +16.87% / +29.69% | **−6.06pp** |
+| train=10, test=7, step=2 | 2 | +17.74% / +20.15% | +24.06% / +27.78% | **−6.98pp** |
+| train=7, test=5, step=2 | 4 | +13.28% .. +23.76% | +15.73% .. +29.69% | **−3.42pp** |
+
+Negative decay = OOS beats IS. Every coin held in train was still in the universe at test time. The selection signal is **persistent, not over-fit** — a real strength signal. The +19% headline is robust to OOS, but as already documented it does NOT survive realistic spread costs at 8h rebalance cadence (OOS net of 5bp/leg = −195% to −203%, matching the in-sample finding). Run via `polymarket-edge walk-forward`.
 
 **Funding-momentum variant** (rank by z-score of recent vs longer-window funding rather than by level) was tested and **lost** to the level-based ranker: +8.0% annualized vs +17.2% on a matched 168h-history budget. Rate-of-change does not beat level here — clean negative result documented in `hl_strategies.py`.
 
@@ -125,12 +164,16 @@ uv run polymarket-edge hl-history \
     --coins BTC,ETH,SOL --days 30      # pull historical funding
 uv run polymarket-edge hl-backtest     # run the funding-capture backtest
 uv run polymarket-edge depth <slug>    # walk the book on every market in a flagged event
-uv run polymarket-edge paper-auto      # one round of paper-trading
-uv run polymarket-edge hl-ci           # bootstrap 95% CIs on Sharpe / ann return
-uv run polymarket-edge report          # write REPORT.md (+ chart PNGs)
-uv run polymarket-edge dashboard       # write dashboard.html (single-file, embeds charts)
+uv run polymarket-edge paper-auto              # one round of paper-trading
+uv run polymarket-edge hl-ci                   # IID bootstrap 95% CIs
+uv run polymarket-edge hl-ci-block             # block bootstrap CIs (autocorr-aware)
+uv run polymarket-edge walk-forward            # OOS validation
+uv run polymarket-edge microstructure-scan     # scan all flagged events, classify, aggregate
+uv run polymarket-edge report                  # write REPORT.md (+ chart PNGs)
+uv run polymarket-edge dashboard               # write dashboard.html
 $env:PYTHONPATH="src"; python scripts/cross_venue_case.py  # cross-venue case study
-uv run pytest                          # 54 tests
+$env:PYTHONPATH="src"; python scripts/size_basket_trade.py --slug <slug> --total-usd 20 --maker
+uv run pytest                                  # 79 tests
 PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 ```
 
@@ -144,6 +187,7 @@ PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 - **Day 5 (depth pass).** Built `book_depth.py` to answer the open question from the red-team: "is the World Cup signal actually tradeable?" Walks the full `/book` for every market in a negRisk event and computes the depth-aware basket-fill. Result: the World Cup gap holds through ~$48K of basket notional; the Weinstein signal is a trap (one market has $7.83 of bid depth); the 2028 Election signal inverts to a loss by $5K/market. 6 more tests (31 total).
 - **Day 5 (upgrade pass — parallel agent work).** Four concurrent additions: `plots.py` (chart generation, matplotlib), `hl_hedge.py` (spread-cost-net backtest; finding: +19% becomes −200% at 5bp/leg, 8h cadence not net-viable), `RECIPES.md` (Ask-Gina-specific recipe framing), and GitHub Actions CI. +14 tests (45 total).
 - **Day 5 (impressive pass — parallel agent work).** Four more concurrent additions: `dashboard.py` (single-file HTML with embedded charts), `cross_venue.py` + `CROSSVENUE.md` (Fed-cuts↔BTC null finding, methodology), `hl_stats.py` (bootstrap 95% CIs — headline +19% becomes "+19% point, [+15%, +24%] CI"), `hl_strategies.py` (funding-momentum variant — lost to level by 9pp, useful "what didn't work" data). +9 tests (**54 total**).
+- **Day 5 (wow pass — parallel agent work).** Five more concurrent streams to close the "structural ceiling" gap from REDTEAM §6: `microstructure.py` + `MICROSTRUCTURE.md` (the headline empirical finding — 63% trap rate on detector flags, 85% in US state races), `walkforward.py` (out-of-sample validation — OOS slightly beats IS, signal is durable), `hl_stats_block.py` (block bootstrap — autocorrelation widens CI by 28%, honest band is [+14.1%, +25.2%]), `EXECUTION.md` + `scripts/size_basket_trade.py` (real-trade runway with UK-jurisdiction simulation path), `GINA_ENGAGEMENT.md` (product-engagement research — Polymarket not publicly confirmed shipped at Gina, recipes reframed). +23 tests (**79 total**).
 
 ## What would be next
 
