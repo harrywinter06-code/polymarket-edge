@@ -199,3 +199,32 @@ Spec issue: the agent discovered the DB's `microstructure_classifications` table
 **What's still open after this pass.** Same as §6: the real $20 trade (Harry's task, UK-restricted; the simulation path is documented) and the in-app Ask Gina session (Harry's task). Every code-side item from the §6 weaknesses list — novel finding, prescriptive classifier, walk-forward, block bootstrap, tail risk, volume reweighting, visual polish — is shipped.
 
 Test count: 109. CI green on every push. Twelve modules, twelve markdown documents, two chart PNGs, one dashboard.html.
+
+## 8. Edge-finding pass — three parallel hypothesis tests
+
+After the previous passes had closed every methodology gap, the project still lacked a *positive expected-return claim* — every finding was either descriptive or walked-back. This pass tested three independent edge hypotheses in parallel and reports all three results honestly, including the cells that didn't survive.
+
+**8a. World Cup market-maker yield (Plan A — positive, knife-edge).** Built a maker-side simulator on the 48 World Cup constituent markets that walks 30 days of historical trade flow from the CLOB data-api and projects net P&L (rebate − adverse selection) forward to tournament resolution. Three AS scenarios:
+
+- Naive (AS=0): +$12,372 projected over 50 days
+- **Moderate (AS = 0.5× spread): +$126 projected** — the headline
+- Informed (AS = 1.0× spread): −$12,120
+
+**Breakeven half-spread fraction = 0.505.** Net P&L crosses zero right at the textbook moderate assumption. 89% of the positive net comes from 5 favourites (France, Spain, England, Argentina, Brazil); 41 of 48 markets are individually net-negative. The basket clears only because top contenders dominate. Implementation `polymarket_mm_sim.py`, writeup [WORLD_CUP_MM.md](WORLD_CUP_MM.md). Honest framing: defensibly positive under any AS assumption below the literature-standard 0.5 of half-spread.
+
+Spec deviation worth noting: the spec's `clob.polymarket.com/trades?market=<token_id>` is auth-gated (401). The agent fell back to the public `data-api.polymarket.com/trades` with `market=<conditionId>` filter — verified the documented `asset`/`token` params silently return unrelated global flow. Server-enforced max pagination offset of 3000 caps lookback at ~4 days on high-volume markets; long-tail markets still get the full 30. Documented in the `WORLD_CUP_MM.md` caveats.
+
+**8b. Hyperliquid basis-hedge + regime conditioning (Plan B — mixed).** Replaced the parametric 5 bps/leg cost in `hl_hedge.py` with a real spot/perp basis model. Of 37 universe coins only 9 have liquid Hyperliquid spot listings — `AVAX, AZTEC, BTC, ENA, ETH, PUMP, SOL, STABLE, XPL`. Hedged headline over 59 rebalances: **−106% annualized, Sharpe −3.60** — the basis decoupled badly during the build window (perp/spot drift dominated, the 5 bps/leg parametric model had been understating real hedge cost).
+
+But regime-conditioning by trailing 7d BTC realized vol surfaces a positive cell: **low-vol tercile (N=11), basis-hedged at 5 bps/leg: +72.5% annualized, Sharpe +1.91, 95% bootstrap CI [−44, +20]**. Med and high vol regimes are decisively negative (−522% and −605% annualized). The wide CI on the positive cell is N=11 — directional evidence, not statistical proof. Implementation `hl_basis_hedge.py`. Spec deviation: the agent substituted a union-grid + per-coin eligibility check for the strict-intersection helper in `_common_grid` because spot listings launching mid-window collapsed the intersection grid to 4 rebalances.
+
+**8c. Funding-extreme directional study (Plan D — strongest positive finding, with caveats).** Tested whether perp prices at extreme funding events (|z| > 1.5, 2.0, 2.5 vs trailing 168h) rally or crash over 6h / 24h / 72h holds across 37 coins. 18 (threshold × direction × horizon) configurations, Bonferroni-corrected at t > 3.05.
+
+- Positive-funding extremes (z > 2): NULL (t = −0.13 at 24h hold). The standard "high-funding-shorts-win" intuition does NOT hold at the >2σ tail.
+- **Negative-funding extremes (z < −2): LONG the perp returns +1.18% over 24h, +4.48% over 72h.** t-stats range +3.27 to +7.09 across the negative-funding cells. **7 of 18 cells clear Bonferroni.**
+
+But the independence check is sharp: with cooldown ≥ 72h between extremes per coin (event independence), event counts collapse ~8× and **zero cells clear Bonferroni** — the headline depends on clustered events. DOGE in isolation clears (t=+3.81); BTC/ETH produced zero events in the window. Honest reading: directional signal exists asymmetrically (the long-side-at-negative-funding edge is real on the data), but the strict-independence version is "candidate hypothesis pending larger sample." Implementation `hl_extremes.py`, appended writeup section in MICROSTRUCTURE.md.
+
+**Combined narrative.** The three findings together support a small diversified portfolio claim: a maker-rebate strategy on the World Cup, a regime-gated basis-hedged funding capture, and a negative-funding-extreme long bias. None of them is a "ship and print money" strategy in isolation — each has a real caveat — but together they're a credible "here's where I'd deploy ~$X across three orthogonal microstructure edges if hired" pitch. That's the email's lead.
+
+Test count: 146. CI green on every push. Fifteen modules, thirteen markdown documents (+ WORLD_CUP_MM.md). All edge hypotheses tested honestly; positive cells and walked-back cells both documented.

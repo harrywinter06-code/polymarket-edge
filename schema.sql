@@ -197,3 +197,15 @@ CREATE INDEX IF NOT EXISTS idx_micro_scan ON microstructure_classifications(scan
 CREATE INDEX IF NOT EXISTS idx_micro_verdict_cat
     ON microstructure_classifications(verdict, category_tag);
 
+-- ---------- plan D: hourly perp close prices for funding-extremes study ----------
+
+CREATE TABLE IF NOT EXISTS hl_perp_candles (
+    coin TEXT NOT NULL,
+    t INTEGER NOT NULL,                -- bucket-start in unix ms (1h candle)
+    close REAL NOT NULL,               -- candle close price (mark proxy)
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (coin, t)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hl_candles_coin_t ON hl_perp_candles(coin, t);
+

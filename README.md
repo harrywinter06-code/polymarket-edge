@@ -86,6 +86,10 @@ Gross decomposition of the +19.0% top-5: ~11.0% comes from the base-rate funding
 
 Funding returns are autocorrelated (ACF(1) = +0.574) — IID resampling under-states the variance. Block bootstrap widens the annualized-return CI by **~28%** and the Sharpe CI by ~12%. The honest defensible band is **[+14.1%, +25.2%]**, not the IID [+14.9%, +23.7%]. Run via `polymarket-edge hl-ci-block`.
 
+**Regime-conditional + basis-hedged result** (the answer to "what's the realistic Sharpe once you actually model the hedge?"): of 37 universe coins, only 9 have liquid spot listings on Hyperliquid for full hedging. On those 9, over 59 rebalances, the headline hedged result is **−106% annualized** — basis decoupled badly during the build window. BUT regime-conditioning by trailing-7d BTC realized vol surfaces a positive cell: **in the low-vol tercile (N=11), the basis-hedged strategy returns +72.5% annualized at 5 bps/leg spread, Sharpe +1.91, 95% CI [−44, +20]**. The CI is wide because N=11 — this is directional evidence, not statistical proof. Implementation: `hl_basis_hedge.py`. CLI: `polymarket-edge basis-regime`.
+
+**Funding extremes — the contrarian directional finding.** Tested whether perp prices at extreme funding events (z>±2 vs trailing 168h) rally or crash over the next 24h, across 18 (threshold × direction × horizon) configurations with Bonferroni correction. Standard "high-funding-shorts-win" intuition does NOT hold at the >2σ positive tail (t = −0.13, null). **The signal is on the NEGATIVE side: long the perp at z<−2 negative-funding extremes returns +1.18% over 24h, +4.48% over 72h, with t-stats +3.27 to +7.09 clearing Bonferroni in 7 of 18 cells**. With strict event-independence cooldown (≥72h), zero cells clear — the headline depends on clustered events on the same coin. DOGE in isolation: t=+3.81. Implementation: `hl_extremes.py`. CLI: `polymarket-edge extremes`.
+
 **Tail risk** on the headline strategy (`polymarket-edge hl-tail`):
 
 | metric | GROSS | NET (5bp/leg) |
@@ -135,6 +139,18 @@ This is the honest answer to the question "what's the Sharpe really?": **depends
 - **Hyperliquid backtest** had hedge-leg cost modeled in a follow-on pass (`hl_hedge.py`): at 5 bps per leg (20 bps round-trip) the headline +19% becomes **−200% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. Salvageable only at weekly+ rebalance. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
 - **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
 - **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.
+
+## Polymarket — projected maker yield on the World Cup basket
+
+Built a market-maker simulator that walks the historical CLOB trade flow on each of the 48 World Cup constituent markets and projects the maker rebate net of adverse selection forward to tournament resolution (~50 days). Three adverse-selection scenarios reported (naive / moderate / informed); breakeven half-spread fraction explicit.
+
+| AS scenario | gross rebate | AS cost | net P&L | projected to 50d |
+|---|---|---|---|---|
+| naive (no AS) | $2,060 | $0 | $2,060 | +$12,372 |
+| moderate (0.5× spread) | $2,060 | $2,039 | $21 | **+$126** |
+| informed (1.0× spread) | $2,060 | $4,078 | −$2,018 | −$12,120 |
+
+**Breakeven half-spread fraction = 0.505.** Net P&L crosses zero right at the moderate-AS assumption — anyone who believes adverse selection on Polymarket sports markets is below the textbook 50% of half-spread (which retail-heavy flow supports) gets a positive projection. **89% of the net P&L comes from 5 favourites** (France, Spain, England, Argentina, Brazil); 41 of 48 markets are individually net-negative. The basket only clears because the deep top-of-table dominates. Implementation: `polymarket_mm_sim.py`. CLI: `polymarket-edge world-cup-mm`. Full writeup: [WORLD_CUP_MM.md](WORLD_CUP_MM.md).
 
 ## Cross-venue null finding (Fed-rate-cuts vs BTC)
 
@@ -198,7 +214,11 @@ uv run polymarket-edge report                  # write REPORT.md (+ chart PNGs)
 uv run polymarket-edge dashboard               # write dashboard.html
 $env:PYTHONPATH="src"; python scripts/cross_venue_case.py  # cross-venue case study
 $env:PYTHONPATH="src"; python scripts/size_basket_trade.py --slug <slug> --total-usd 20 --maker
-uv run pytest                                  # 109 tests
+$env:PYTHONPATH="src"; python scripts/world_cup_mm_sim.py        # Plan A: World Cup MM yield
+$env:PYTHONPATH="src"; python scripts/hl_basis_regime.py         # Plan B: basis-hedge + regime
+$env:PYTHONPATH="src"; python scripts/hl_extremes_study.py       # Plan D: funding extremes
+uv run --script scripts/sign_simulation_trade.py --slug 2026-fifa-world-cup-winner-595 --total-usd 5
+uv run pytest                                  # 146 tests
 PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 ```
 
