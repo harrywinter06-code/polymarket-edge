@@ -107,7 +107,7 @@ footer a { color: var(--muted); }
 <main class="container">
   <h1>polymarket-edge</h1>
   <p class="subtitle">Research dashboard &middot; generated 2026-05-22 00:35</p>
-  <p class="lead">Event-level no-arb scanner for Polymarket mutually-exclusive (negRisk) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application. Every headline number below has been red-teamed; the depth-vs-trap and net-of-spread tables are where the project earns its keep.</p>
+  <p class="lead">Event-level no-arb scanner for Polymarket mutually-exclusive (negRisk) markets, plus a Hyperliquid funding-capture backtest. Every headline number below has been red-teamed; the depth-vs-trap and net-of-spread tables are where the project earns its keep.</p>
 
   <section class="kpis"><div class="kpi"><div class="kpi-value">193</div><div class="kpi-label">Polymarket events scored</div></div><a class="kpi" href="#depth"><div class="kpi-value">+150 bp</div><div class="kpi-label">World Cup gap @ $1K/market</div></a><div class="kpi"><div class="kpi-value">+19% / -200%</div><div class="kpi-label">Hyperliquid gross / net annualized</div></div><div class="kpi"><div class="kpi-value">109</div><div class="kpi-label">Tests passing</div></div></section>
 
@@ -143,15 +143,14 @@ footer a { color: var(--muted); }
     <h2>Limitations</h2>
     <p>Every headline number above is gross of execution cost on the Hyperliquid side and
     top-of-book on the Polymarket side. The full self-audit lives in
-    <code>REDTEAM.md</code>; the shippable-recipe framing for Ask Gina lives in
-    <code>RECIPES.md</code>. Sample size on the Hyperliquid backtest is 30 days
+    <code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 30 days
     (~56 rebalances) &mdash; Sharpe confidence intervals are wide, and listing/delisting
     survivorship is uncorrected.</p>
   </section>
 
   <footer>
     Built by Harry Winter &middot; github.com/harrywinter06-code/polymarket-edge &middot;
-    view source for the README, REDTEAM, RECIPES, MICROSTRUCTURE.
+    view source for the README, REDTEAM, MICROSTRUCTURE.
   </footer>
 </main>
 </body>

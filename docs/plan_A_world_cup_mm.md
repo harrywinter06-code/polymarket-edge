@@ -295,7 +295,7 @@ Sections:
 4. Why it's positive (or not) — mechanical explanation
 5. Caveats — the AS modeling, the projection linearity, the trade-data
    approximation
-6. Why this matters for Ask Gina — connection to a shippable maker-recipe
+6. Bottom line — the practical implication of the numbers
 
 ## Constraints
 

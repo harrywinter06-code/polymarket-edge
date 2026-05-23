@@ -4,9 +4,8 @@ Generated: 2026-05-22 00:34
 
 ## What we built and why
 
-The Ask Gina quant-intern job description names Polymarket and Hyperliquid
-as the venues. This project is a forward-observation + funding-capture stack
-across both, designed in five days from a verified read of each venue's
+A forward-observation + funding-capture stack across Polymarket and
+Hyperliquid, designed in five days from a verified read of each venue's
 public API.
 
 Headline design decision: on Polymarket, `P(YES) + P(NO) = $1` is

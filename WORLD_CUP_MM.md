@@ -108,12 +108,12 @@ as a fraction of price, so they clear the rebate. The long tail at $0.01-
   abstraction over what is actually a queue: a hypothetical "sole maker" never
   exists, and competing makers eat each other's rebate.
 
-## Why this matters for Ask Gina
+## Bottom line
 
 Microstructure trap-rate finding said: only the World Cup is durable. This
 sim says: even on that durable signal, the maker-rebate strategy is
-**knife-edge-positive**. The shippable Gina recipe is not "deploy capital
-here"; it's **"warn the user the rebate floor is structurally tight on
-sports — at AS > 50% of spread you lose, and 41/48 of the long-tail
-constituent markets are net-negative individually."** That's a defensible
-risk-disclosure recipe drawn directly from these numbers.
+**knife-edge-positive**. The conclusion is not "deploy capital here";
+it's **"the rebate floor is structurally tight on sports — at AS > 50%
+of spread you lose, and 41/48 of the long-tail constituent markets are
+net-negative individually."** That's a defensible risk-disclosure read
+drawn directly from these numbers.

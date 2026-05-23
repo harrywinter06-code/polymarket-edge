@@ -327,7 +327,7 @@ Title the section `## Hyperliquid funding extremes — directional study`.
 ~400-600 words. Use the live numbers. Lead with the headline number on the
 side that won (long or short), with the t-stat and Bonferroni adjustment.
 Caveats section covers the cooldown / clustering / N issues. Closing sentence
-connects to Ask Gina: "the trade is 24h-hold-from-extreme; sized via the
+states the practical read: "the trade is 24h-hold-from-extreme; sized via the
 existing depth analysis pattern."
 
 ## Constraints

@@ -164,9 +164,8 @@ After the prior four passes, I wrote down what was actually still WEAK about the
 3. **No novel finding** — every result here is a clean implementation of a known pattern.
 4. **No walk-forward OOS** — the +19% headline was in-sample on the full window.
 5. **Bootstrap CIs were IID** — wrong on autocorrelated funding returns.
-6. **Never engaged with Ask Gina's actual product.**
 
-Five parallel agent streams in the fifth pass:
+Four parallel agent streams in the fifth pass:
 
 **6a. Microstructure trap-rate study — THE headline finding now.** Scanned 500 active events, classified each by depth-aware basket P&L at $50 and $500/market. 19/500 = 3.8% flagged by the detector. **Of those, 63.2% are traps** (gap inverts to a loss at $50/market because one constituent has near-zero depth). The trap pattern is concentrated in 2-market US state-election negRisk events — 11/13 = 85% trap rate for `Politics`/`Elections`/`US Election`/`Midterms` tags combined. The two `real` signals identified are 48-market World Cup (Soccer, the durable case-study event from earlier passes) and 20-market Nobel Peace Prize (Awards). The mechanical explanation — thin-side bid-book collapse on the 5%-probability market — is structural rather than transient. Full writeup: [MICROSTRUCTURE.md](MICROSTRUCTURE.md). This is the first finding in the project that is genuinely population-level research rather than n=1 anecdote.
 
@@ -176,9 +175,7 @@ Five parallel agent streams in the fifth pass:
 
 **6d. Real-trade runway.** `scripts/size_basket_trade.py` computes per-market notionals, expected fills, maker-vs-taker net P&L, and a kill-the-trade threshold for a $20 real trade on a chosen event. Live-tested on the World Cup: at $20 total, $0.42/market, maker mode shows **+170 bps net (rebate-positive) — expected P&L +$0.04**; taker mode at 0.75% Sports fee shows −15 cents. `EXECUTION.md` is the step-by-step checklist. **UK jurisdiction is restricted** by Polymarket (verified via help.polymarket.com); the checklist documents the py-clob-client non-broadcast simulation path for restricted-jurisdiction users — the order builder produces signed orders that we don't post. Not a substitute for a real fill, but better than nothing.
 
-**6e. Ask Gina engagement research.** Public research only (the live app at askgina.ai returned 403 to WebFetch; relied on partner posts + founder LinkedIn + Zerion case study). **Polymarket integration is not publicly confirmed shipped at Gina** — same for Hyperliquid. RECIPES.md targeted hypothetical integration; `GINA_ENGAGEMENT.md` is now the honest version with three concrete recipes (trap-warning enrichment is the strongest, leans on the new microstructure finding), explicit TODO sections for Harry to fill in after in-app verification, and a closing paragraph that's clear about what's research vs hypothesis.
-
-**What's still open after this pass.** One real $20 fill from the user side (the sizing script + checklist are the runway; the actual fill must be done by Harry, modulo the UK jurisdiction constraint). One actual in-app Gina session by Harry (the engagement template is ready; the in-app friction observations must be filled by Harry). Neither of those can be done by AI agents. Everything else from the original weakness list — novel finding, walk-forward, block bootstrap, product engagement framework — has been addressed.
+**What's still open after this pass.** One real $20 fill from the user side (the sizing script + checklist are the runway; the actual fill must be done by Harry, modulo the UK jurisdiction constraint). Everything else from the original weakness list — novel finding, walk-forward, block bootstrap — has been addressed.
 
 Test count: 79. CI green on every push. Eight markdown documents, five chart/HTML artifacts, eleven modules.
 
@@ -196,7 +193,7 @@ Spec issue: the agent discovered the DB's `microstructure_classifications` table
 
 **7d. Visual polish.** `dashboard.py` CSS rewritten with a system-mono numeric font, restrained Tailwind-emerald/rose/amber palette, KPI cards with 1px borders and uppercase tracked labels, mobile breakpoint at <600px, footer byline. `plots.py` matplotlib rcParams set globally (DejaVu Sans, slate-700 ticks, despined top/right, single dotted horizontal grid, 144 DPI). Dashboard final size 239 KB (under the 250 KB self-contained cap). The before-after delta is significant — the dashboard now reads as a polished portfolio artefact rather than "default browser styling."
 
-**What's still open after this pass.** Same as §6: the real $20 trade (Harry's task, UK-restricted; the simulation path is documented) and the in-app Ask Gina session (Harry's task). Every code-side item from the §6 weaknesses list — novel finding, prescriptive classifier, walk-forward, block bootstrap, tail risk, volume reweighting, visual polish — is shipped.
+**What's still open after this pass.** Same as §6: the real $20 trade (Harry's task, UK-restricted; the simulation path is documented). Every code-side item from the §6 weaknesses list — novel finding, prescriptive classifier, walk-forward, block bootstrap, tail risk, volume reweighting, visual polish — is shipped.
 
 Test count: 109. CI green on every push. Twelve modules, twelve markdown documents, two chart PNGs, one dashboard.html.
 

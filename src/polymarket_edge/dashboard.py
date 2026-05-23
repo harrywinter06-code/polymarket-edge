@@ -26,9 +26,9 @@ from polymarket_edge import hl_backtest, hl_hedge, report
 # parsed from markdown so the dashboard framing stays editorial.
 _HEADER_BLURB = (
     "Event-level no-arb scanner for Polymarket mutually-exclusive (negRisk) markets, "
-    "plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an "
-    "Ask Gina quant-intern application. Every headline number below has been red-teamed; the "
-    "depth-vs-trap and net-of-spread tables are where the project earns its keep."
+    "plus a Hyperliquid funding-capture backtest. Every headline number below has been "
+    "red-teamed; the depth-vs-trap and net-of-spread tables are where the project earns "
+    "its keep."
 )
 
 # Hand-curated from README §"Results" + REDTEAM §3a. Hardcoded per spec —
@@ -430,15 +430,14 @@ def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
     <h2>Limitations</h2>
     <p>Every headline number above is gross of execution cost on the Hyperliquid side and
     top-of-book on the Polymarket side. The full self-audit lives in
-    <code>REDTEAM.md</code>; the shippable-recipe framing for Ask Gina lives in
-    <code>RECIPES.md</code>. Sample size on the Hyperliquid backtest is 30 days
+    <code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 30 days
     (~56 rebalances) &mdash; Sharpe confidence intervals are wide, and listing/delisting
     survivorship is uncorrected.</p>
   </section>
 
   <footer>
     Built by Harry Winter &middot; github.com/harrywinter06-code/polymarket-edge &middot;
-    view source for the README, REDTEAM, RECIPES, MICROSTRUCTURE.
+    view source for the README, REDTEAM, MICROSTRUCTURE.
   </footer>
 </main>
 </body>
