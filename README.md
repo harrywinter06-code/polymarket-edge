@@ -2,9 +2,35 @@
 
 [![ci](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml)
 
-Event-level no-arb scanner for Polymarket mutually-exclusive (`negRisk`) markets, plus a Hyperliquid funding-capture backtest. Built in five days as ammunition for an Ask Gina quant-intern application.
+A Hyperliquid funding-capture backtest validated on **365 days × 6 majors**, plus a depth-aware microstructure scanner on Polymarket negRisk events. Built for the Ask Gina quant-intern application.
 
-A red-team self-audit of every claim below lives in [REDTEAM.md](REDTEAM.md). Read that file before trusting any number. The product framing for Ask Gina specifically — what shippable recipes follow from these findings — lives in [RECIPES.md](RECIPES.md) and [GINA_ENGAGEMENT.md](GINA_ENGAGEMENT.md). A cross-venue case study (Fed-rate-cuts Polymarket market vs BTC perp funding, null result, rigorous method) lives in [CROSSVENUE.md](CROSSVENUE.md). **The headline empirical finding — that 63% of detector-flagged negRisk events are unprofitable traps, concentrated in 2-market US state-election races at 85% trap rate — lives in [MICROSTRUCTURE.md](MICROSTRUCTURE.md).** A single-file [`dashboard.html`](dashboard.html) renders the headline numbers and charts in a browser without external dependencies. [`EXECUTION.md`](EXECUTION.md) documents the runway for a real $20 trade including the UK-jurisdiction non-broadcast simulation path.
+## Headline finding
+
+**Trailing-K funding-capture, top-5 / trail-24h / rebalance-8h, validated walk-forward across 19 sliding 60d-train / 30d-test windows on BTC, ETH, SOL, XRP, DOGE, AVAX:**
+
+- **In-sample mean annualized: +7.73%**
+- **Out-of-sample mean annualized: +6.38%**
+- **Decay (IS − OOS): +1.35 pp** — mild, conventional direction, **not over-fit**
+- **18 of 19 OOS windows positive**; only window 13 (Feb 2026, Fed-cut repricing) produced an OOS loss of −0.95%
+- **Block-bootstrap 95% CI on annualized OOS return: [+6.32%, +9.56%]** — excludes zero (n=1092 per-period returns, optimal block length 10 by Politis-White)
+
+Regime decomposition by trailing-7d BTC realized volatility (terciles):
+
+| regime | N | ann return | bootstrap CI | Sharpe |
+|---|---|---|---|---|
+| low BTC vol | 200 | **+6.94%** | [+6.40%, +7.46%] | +58.9 |
+| med BTC vol | 202 | +3.12% | [+2.34%, +3.86%] | +18.6 |
+| high BTC vol | 202 | +2.96% | [+1.98%, +3.90%] | +14.4 |
+
+Low-vol captures ~2× the carry of med/high. Sharpe values are inflated because this is *gross* funding-capture only — execution costs at the 8h cadence push net returns negative (see [§ Hyperliquid cost reality](#hyperliquid--cost-reality) below). Real-money deployable variant is the regime-conditional version at lower rebalance frequency.
+
+Full year-data audit including everything that didn't survive: [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md). Self-audit log of every claim through the build, with what was walked back: [REDTEAM.md](REDTEAM.md). Product framing for Ask Gina specifically: [RECIPES.md](RECIPES.md) and [GINA_ENGAGEMENT.md](GINA_ENGAGEMENT.md). Polymarket microstructure case studies: [MICROSTRUCTURE.md](MICROSTRUCTURE.md). Single-file browser dashboard: [`dashboard.html`](dashboard.html). Execution runway: [`EXECUTION.md`](EXECUTION.md).
+
+## Hyperliquid — cost reality
+
+The +6.4% OOS mean is gross of execution. A separate analysis ([REDTEAM §3b](REDTEAM.md), `hl_hedge.py`) models the spread cost of the short-perp + long-spot hedge: at 5 bps/leg (20 bps round-trip per rebalance), the headline 8h cadence collapses to net-negative because the gross carry per 8h period (~1.7 bps) is smaller than the cost. Breakeven is ~0.43 bps/leg. The strategy is real but the natural cadence isn't tradeable at retail execution costs; the salvageable version runs at weekly+ rebalance, where the spread cost amortizes over a larger gross return.
+
+The honest one-line summary: **+6.4% OOS gross over 19 walk-forward windows on year data, but consumed by realistic execution at 8h cadence — viable only at lower rebalance frequencies, where the regime-conditional low-vol cell does most of the work.**
 
 ## What it does
 

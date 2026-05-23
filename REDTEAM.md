@@ -228,3 +228,29 @@ But the independence check is sharp: with cooldown ≥ 72h between extremes per 
 **Combined narrative.** The three findings together support a small diversified portfolio claim: a maker-rebate strategy on the World Cup, a regime-gated basis-hedged funding capture, and a negative-funding-extreme long bias. None of them is a "ship and print money" strategy in isolation — each has a real caveat — but together they're a credible "here's where I'd deploy ~$X across three orthogonal microstructure edges if hired" pitch. That's the email's lead.
 
 Test count: 146. CI green on every push. Fifteen modules, thirteen markdown documents (+ WORLD_CUP_MM.md). All edge hypotheses tested honestly; positive cells and walked-back cells both documented.
+
+## 9. Year-data audit — the foundational re-evaluation
+
+After all the prior passes the single deepest critique was that the data window (22 days) was too thin to support the statistical claims. I pulled 365 days of Hyperliquid funding + perp price data on the 6 majors with both liquid spot and a year of funding history (BTC, ETH, SOL, XRP, DOGE, AVAX) — 52,560 hourly funding rows, 30,015 hourly candles — and re-ran every Hyperliquid analysis. The honest comparison sat under [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md). Summary of what changed:
+
+**What was walked back at year-scale.**
+
+- **"OOS beats IS by ~6pp" (was: walk-forward on N=2-4 windows showed negative decay).** Refuted. At N=19 sliding windows on year data, decay is **+1.35 pp (conventional positive direction — IS beats OOS, modestly)**. The small-N "OOS beats IS" was sample-size noise that we cherry-picked as a strength. The honest framing is: the predictor is mildly over-fit (which is normal) but the OOS return is still positive on 18 of 19 windows.
+
+- **"Long the perp at z<−2 negative-funding extremes" (was: 7 of 18 cells cleared Bonferroni at cooldown=0 on ~22d).** Refuted. At year-scale N with cooldown=72h (proper event independence), **zero of 18 cells clear Bonferroni**. The largest |t| anywhere in the family is 2.26, far below the 3.05 threshold. The earlier result was driven by clustered events on the same coin within a 22-day window — exactly the failure mode the cooldown check is designed to catch, and it caught it once the sample was big enough.
+
+- **"Block-bootstrap CI [+14.1%, +25.2%]" (was: on N=22 days at 22-day sample).** Refined. Year-scale block bootstrap on N=1,092 per-period returns, optimal block length 10 (Politis-White), gives **CI [+6.32%, +9.56%]** annualized — lower and tighter than the small-N CI. The earlier CI was wider but centered on a more favourable sub-sample of the data. The honest CI is [+6.3%, +9.6%].
+
+**What survived at year-scale.**
+
+- **Trailing-K funding-capture has positive gross expected return.** Block bootstrap CI excludes zero. +6.38% OOS mean across 19 walk-forward windows. 18 of 19 windows OOS-positive. This is the project's actual defensible finding.
+
+- **Low-vol regime captures roughly 2× the carry of med/high regimes.** All three regime CIs exclude zero (low: [+6.40%, +7.46%], med: [+2.34%, +3.86%], high: [+1.98%, +3.90%]). The directional ordering survives at proper N. The dramatic +72% number from the N=11 hedged-low-vol cell does NOT survive — the year-scale low-vol cell is +6.94%, an order of magnitude less. The earlier point estimate was small-N variance.
+
+- **Predictor is not over-fit.** 1.35 pp IS-OOS decay is conventional and mild. The signal is real, modest, and reproduces out of sample.
+
+**Honest interpretation.** The Hyperliquid funding-capture strategy has a real positive gross edge of ~+6% OOS annualized on year data. The previous more-dramatic claims (+19%, +72% in low-vol, contrarian-long at extremes, OOS beats IS) were all small-N artifacts that the year-data run honestly walked back. The walked-back claims came down where they were over-stated and the survived claims are statistically defensible at the much larger sample. The strategy is not net-viable at 8h cadence after realistic spread costs (this REDTEAM §3b finding stands), but the underlying signal is real — the deployable form is at lower rebalance frequencies where the per-rebalance cost amortizes.
+
+**The deepest critique addressed.** Previously every "edge" finding was small-N at the headline level. The year-data audit replaces those with a statistically defensible core finding (gross funding-capture works) and explicitly walks back the previous over-claims. The pattern is no longer "claim X, walk back, claim Y, walk back" iteration — it's "claim X on small N, get the bigger sample, walk back what doesn't hold and confirm what does." That's the only legitimate way out of the small-N trap.
+
+Test count after this pass: 146 (no new tests; the audit re-uses existing analysis modules). CI green.
