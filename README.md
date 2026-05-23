@@ -16,7 +16,13 @@ A Hyperliquid funding-capture backtest validated on **365 days × 12 majors** (B
 
 Sharpe values on gross funding-capture alone are inflated; execution costs at the 8h cadence push net returns negative (see [§ Hyperliquid — cost reality](#hyperliquid--cost-reality)). The deployable result is the **cadence-frontier cell at ≥ 2-weekly rebalance**.
 
-Full year-data audit including everything that didn't survive: [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md). Self-audit log of every claim through the build, with what was walked back: [REDTEAM.md](REDTEAM.md). Polymarket microstructure case studies: [MICROSTRUCTURE.md](MICROSTRUCTURE.md). Single-file browser dashboard: [`dashboard.html`](dashboard.html). Execution runway: [`EXECUTION.md`](EXECUTION.md).
+**Live dashboards** (single-file HTML, base64-embedded charts, no JS):
+
+- Combined: [harrywinter06-code.github.io/polymarket-edge/dashboard.html](https://harrywinter06-code.github.io/polymarket-edge/dashboard.html)
+- Polymarket focus: […/dashboard_polymarket.html](https://harrywinter06-code.github.io/polymarket-edge/dashboard_polymarket.html) — depth-walking + microstructure trap-rate
+- Hyperliquid focus: […/dashboard_hyperliquid.html](https://harrywinter06-code.github.io/polymarket-edge/dashboard_hyperliquid.html) — cadence frontier + walk-forward + tail risk
+
+Self-audit + supporting docs: [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md) (full year-data audit, including what didn't survive) · [REDTEAM.md](REDTEAM.md) (claim-by-claim walk-back log) · [MICROSTRUCTURE.md](MICROSTRUCTURE.md) (Polymarket microstructure case studies) · [EXECUTION.md](EXECUTION.md) (real-trade execution runway).
 
 ## Hyperliquid — cost reality
 
