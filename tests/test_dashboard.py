@@ -105,7 +105,7 @@ def test_dashboard_renders_microstructure_section(
     out = tmp_path / "dashboard.html"
     write_dashboard(tmp_conn, out)
     text = out.read_text(encoding="utf-8")
-    assert "live microstructure scan" in text
+    assert "microstructure scan" in text.lower()
     assert "Sports" in text and "Politics" in text
     assert "trap rate" in text.lower()
     assert "scan-1" in text
@@ -133,3 +133,49 @@ def test_dashboard_handles_missing_pngs(
     assert "Chart not yet rendered" in text
     # And still self-contained.
     assert _EXTERNAL_TAG.search(text) is None
+
+
+def test_polymarket_focused_dashboard_excludes_hyperliquid_sections(
+    tmp_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """The polymarket-focused view drops HL strategy/PnL tables and shows only
+    the Polymarket microstructure sections."""
+    out = tmp_path / "dashboard_polymarket.html"
+    write_dashboard(tmp_conn, out, venue="polymarket")
+    text = out.read_text(encoding="utf-8")
+    # Polymarket-specific headings present.
+    assert "depth-vs-trap" in text.lower()
+    assert "Top flagged events" in text
+    # Hyperliquid sections absent.
+    assert "cadence frontier" not in text.lower()
+    assert "funding apr" not in text.lower()
+    assert "Gross strategy results" not in text
+    # Cross-link footer points at the other venue.
+    assert "dashboard_hyperliquid.html" in text
+    # Self-contained.
+    assert _EXTERNAL_TAG.search(text) is None
+
+
+def test_hyperliquid_focused_dashboard_excludes_polymarket_sections(
+    tmp_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    out = tmp_path / "dashboard_hyperliquid.html"
+    write_dashboard(tmp_conn, out, venue="hyperliquid")
+    text = out.read_text(encoding="utf-8")
+    # Hyperliquid-specific headings present.
+    assert "Cadence frontier" in text
+    assert "Cumulative gross" in text
+    # Polymarket sections absent.
+    assert "depth-vs-trap" not in text.lower()
+    assert "Top flagged events" not in text
+    # Cross-link footer points at the other venue.
+    assert "dashboard_polymarket.html" in text
+    assert _EXTERNAL_TAG.search(text) is None
+
+
+def test_unknown_venue_raises(tmp_conn: sqlite3.Connection, tmp_path: Path) -> None:
+    import pytest
+
+    out = tmp_path / "dashboard.html"
+    with pytest.raises(ValueError):
+        write_dashboard(tmp_conn, out, venue="bogus")

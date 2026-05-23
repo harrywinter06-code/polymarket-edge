@@ -798,12 +798,41 @@ def trap_predict_cmd(
 def dashboard_cmd(
     db_path: Path = DEFAULT_DB,
     out: Path = typer.Option(Path("dashboard.html"), help="Output HTML path"),  # noqa: B008
+    venue: str = typer.Option(
+        "all",
+        help="Focus: 'all' (combined), 'polymarket', or 'hyperliquid'. "
+        "Each focused view shows only its venue's sections plus a "
+        "cross-link footer to the other.",
+    ),
+    all_venues: bool = typer.Option(
+        False,
+        "--all-venues/--single",
+        help="Convenience: emit all three dashboards (combined + both focused) "
+        "in one invocation. Output filenames are derived from --out: "
+        "dashboard.html, dashboard_polymarket.html, dashboard_hyperliquid.html.",
+    ),
 ) -> None:
     """Generate the single-file HTML dashboard (embeds charts as base64)."""
+    if venue not in ("all", "polymarket", "hyperliquid"):
+        typer.echo(f"error: --venue must be one of all/polymarket/hyperliquid, got {venue}")
+        raise typer.Exit(2)
+
     conn = db.connect(db_path)
     db.init_schema(conn)
-    p = dashboard.write_dashboard(conn, out)
-    typer.echo(f"wrote {p}")
+
+    if all_venues:
+        out_dir = out.parent
+        targets = [
+            ("all", out_dir / "dashboard.html"),
+            ("polymarket", out_dir / "dashboard_polymarket.html"),
+            ("hyperliquid", out_dir / "dashboard_hyperliquid.html"),
+        ]
+        for v, path in targets:
+            p = dashboard.write_dashboard(conn, path, venue=v)
+            typer.echo(f"wrote {p}  ({v})")
+    else:
+        p = dashboard.write_dashboard(conn, out, venue=venue)
+        typer.echo(f"wrote {p}  ({venue})")
 
 
 @app.command("hl-ci")

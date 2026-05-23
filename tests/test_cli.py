@@ -398,6 +398,36 @@ def test_dashboard_command(db_path: Path) -> None:
     assert out.exists()
 
 
+def test_dashboard_command_venue_polymarket(db_path: Path) -> None:
+    out = db_path.parent / "dashboard_polymarket.html"
+    result = runner.invoke(
+        cli.app,
+        ["dashboard", "--db-path", str(db_path), "--out", str(out), "--venue", "polymarket"],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    assert "polymarket" in result.output
+
+
+def test_dashboard_command_all_venues_emits_three_files(db_path: Path) -> None:
+    out = db_path.parent / "dashboard.html"
+    result = runner.invoke(
+        cli.app, ["dashboard", "--db-path", str(db_path), "--out", str(out), "--all-venues"]
+    )
+    assert result.exit_code == 0, result.output
+    for name in ("dashboard.html", "dashboard_polymarket.html", "dashboard_hyperliquid.html"):
+        assert (db_path.parent / name).exists(), f"missing {name}"
+
+
+def test_dashboard_command_invalid_venue_exits_nonzero(db_path: Path) -> None:
+    result = runner.invoke(
+        cli.app,
+        ["dashboard", "--db-path", str(db_path), "--venue", "bogus"],
+    )
+    assert result.exit_code == 2
+    assert "venue" in result.output.lower()
+
+
 def test_microstructure_scan_command(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

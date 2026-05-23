@@ -97,11 +97,52 @@ def _kpi_card(value: str, label: str, anchor: str | None = None) -> str:
 
 
 def _kpi_grid(conn: sqlite3.Connection, test_count: int) -> str:
+    """Combined cross-venue KPI grid for the `dashboard.html` view."""
     n_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     cards = [
         _kpi_card(f"{n_events:,}", "Polymarket events scored"),
         _kpi_card("+150 bp", "World Cup gap @ $1K/market", anchor="depth"),
-        _kpi_card("+19% / -200%", "Hyperliquid gross / net annualized"),
+        _kpi_card("+11.5% / -207%", "Hyperliquid gross / net annualized (8h cadence)"),
+        _kpi_card(str(test_count), "Tests passing"),
+    ]
+    return '<section class="kpis">' + "".join(cards) + "</section>"
+
+
+def _polymarket_kpi_grid(conn: sqlite3.Connection, test_count: int) -> str:
+    """Polymarket-focused KPI grid: depth-walking is the headline."""
+    n_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    # Latest scan's trap rate from microstructure_classifications.
+    latest = conn.execute(
+        "SELECT scan_id FROM microstructure_classifications "
+        "GROUP BY scan_id ORDER BY MAX(classified_at) DESC LIMIT 1"
+    ).fetchone()
+    trap_rate_label = "—"
+    if latest is not None:
+        verdicts = conn.execute(
+            "SELECT verdict, COUNT(*) FROM microstructure_classifications "
+            "WHERE scan_id = ? AND verdict != 'noise' GROUP BY verdict",
+            (latest[0],),
+        ).fetchall()
+        counts = {v: n for v, n in verdicts}
+        total = sum(counts.values())
+        trap = counts.get("trap", 0)
+        if total:
+            trap_rate_label = f"{trap / total * 100:.0f}% trap rate"
+    cards = [
+        _kpi_card(f"{n_events:,}", "Active events scored"),
+        _kpi_card("+150 bp", "World Cup gap @ $1K/market", anchor="depth"),
+        _kpi_card(trap_rate_label, "Most-recent microstructure scan"),
+        _kpi_card(str(test_count), "Tests passing"),
+    ]
+    return '<section class="kpis">' + "".join(cards) + "</section>"
+
+
+def _hyperliquid_kpi_grid(_conn: sqlite3.Connection, test_count: int) -> str:
+    """Hyperliquid-focused KPI grid: cadence-frontier and OOS validation are headline."""
+    cards = [
+        _kpi_card("+11.5%", "Gross annualised (n=1,093 rebal, 12 majors, 365d)"),
+        _kpi_card("20 / 20", "OOS walk-forward windows positive"),
+        _kpi_card("≥ 336h", "Break-even cadence at 5 bp/leg"),
         _kpi_card(str(test_count), "Tests passing"),
     ]
     return '<section class="kpis">' + "".join(cards) + "</section>"
@@ -448,92 +489,219 @@ footer a { color: var(--muted); }
 """.strip()
 
 
-def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    test_count = _count_tests()
-    kpi_grid = _kpi_grid(conn, test_count)
-    pnl_chart = _chart_block("Cumulative gross P&L", png_dir / "hl_cumulative_pnl.png")
-    apr_chart = _chart_block("Funding APR per coin", png_dir / "funding_apr_per_coin.png")
+_POLYMARKET_BLURB = (
+    "Depth-aware microstructure scanner for Polymarket mutually-exclusive (negRisk) "
+    "events. The detector reads top-of-book; the depth-walker walks the full /book "
+    "at realistic notional and splits real signals from the trap-shaped ones. "
+    "Population statistic: 56-77% of detector-flagged events invert to a loss at "
+    "$50/market, concentrated in 2-market US-politics events."
+)
+
+_HYPERLIQUID_BLURB = (
+    "Funding-capture backtest on Hyperliquid perpetuals over 365 days x 12 majors "
+    "(105,120 hourly ticks). Trailing-K top-5 trail-24h shorts pay +11.5% gross "
+    "annualised at 8h cadence, but execution costs collapse this to -207% net. "
+    "The deployable region is the cadence-frontier cell at >= 2-weekly rebalance."
+)
+
+
+def _polymarket_sections(conn: sqlite3.Connection) -> str:
     flagged_table = _top_flagged_table(conn)
     depth_table = _depth_table()
+    micro_section = _microstructure_section(conn)
+    return f"""
+  <h2>Top flagged events</h2>
+  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown report uses.</p>
+  {flagged_table}
+
+  <h2 id="depth">Depth-vs-trap (the headline finding)</h2>
+  <p>A top-of-book gap detector flags all three of the cases below. The depth-aware
+  basket model walks each market's full <code>/book</code> at realistic notionals and
+  separates the real signal from the marginal one from the trap.</p>
+  {depth_table}
+
+  <h2>Live microstructure scan (by category)</h2>
+  <p class="muted">Populated by <code>polymarket-edge microstructure-scan</code>.
+  Each scan walks the book for every flagged negRisk event at $50 and $500
+  per market and assigns a verdict. Categories show where traps cluster &mdash;
+  2-market US state races dominate.</p>
+  {micro_section}
+"""
+
+
+def _hyperliquid_sections(png_dir: Path, conn: sqlite3.Connection) -> str:
+    pnl_chart = _chart_block("Cumulative gross P&L", png_dir / "hl_cumulative_pnl.png")
+    apr_chart = _chart_block("Funding APR per coin", png_dir / "funding_apr_per_coin.png")
+    cadence_chart = _chart_block(
+        "Cadence frontier: gross vs net annualised by rebalance cadence",
+        png_dir / "cadence_frontier.png",
+    )
     strategy_table = _hl_strategy_table(conn)
     hedge_table = _hedge_cost_table(conn)
-    micro_section = _microstructure_section(conn)
+    return f"""
+  <h2>Cumulative gross P&amp;L</h2>
+  {pnl_chart}
+
+  <h2>Cadence frontier &mdash; the deployable finding</h2>
+  <p>At 5 bp/leg the 8h cadence collapses to net &minus;207%; net annualised crosses
+  zero between weekly and 2-weekly. Per-period breakeven on the 8h variant is 0.26 bps/leg
+  &mdash; below any realistic execution cost. The carry signal is durable; the binding
+  constraint is execution latency.</p>
+  {cadence_chart}
+
+  <h2>Gross strategy results</h2>
+  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h.</p>
+  {strategy_table}
+
+  <h2>Hedge cost sensitivity by cadence</h2>
+  <p>5 bp per leg (20 bp round-trip) per rebalance. The headline +11.5% gross at 8h
+  cadence becomes &minus;207% net; the cadence at which net annualised first crosses
+  zero is highlighted.</p>
+  {hedge_table}
+
+  <h2>Funding APR per coin</h2>
+  {apr_chart}
+"""
+
+
+def _limitations_section(scope: str) -> str:
+    """`scope` is 'all' / 'polymarket' / 'hyperliquid' — drives the language."""
+    if scope == "polymarket":
+        body = (
+            "Polymarket fees are per-category (Sports 0.75%, Politics 1.0%, etc.); "
+            "the depth pass is mandatory before sizing because top-of-book reads "
+            "lie on thin-side legs. The trap classifier is at n=30 today &mdash; "
+            "scaffolding-grade, growing forward via the daily scan cron."
+        )
+    elif scope == "hyperliquid":
+        body = (
+            "Sample size on the backtest is 365 days (1,093 rebalances at the 8h "
+            "cadence, 12 majors). Sharpe is the carry-only upper bound &mdash; net "
+            "of 5 bp/leg spread the 8h cadence collapses to &minus;207%; the "
+            "deployable region is the &ge; 2-weekly slice of the cadence frontier."
+        )
+    else:  # all
+        body = (
+            "Every headline number above is gross of execution cost on the Hyperliquid "
+            "side and top-of-book on the Polymarket side. The full self-audit lives in "
+            "<code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 365 days "
+            "(1,093 rebalances, 12 majors); the trap classifier is at n=30, scaffolding-grade."
+        )
+    return (
+        '<section class="limitations">\n'
+        '  <h2>Limitations</h2>\n'
+        f'  <p>{body}</p>\n'
+        '</section>'
+    )
+
+
+def _cross_link_footer(venue: str) -> str:
+    """Footer that points at the other-venue dashboard."""
+    if venue == "polymarket":
+        link = (
+            '<p>Hyperliquid funding-capture context: '
+            '<a href="dashboard_hyperliquid.html">dashboard_hyperliquid.html</a> '
+            '&middot; combined view: <a href="dashboard.html">dashboard.html</a></p>'
+        )
+    elif venue == "hyperliquid":
+        link = (
+            '<p>Polymarket microstructure context: '
+            '<a href="dashboard_polymarket.html">dashboard_polymarket.html</a> '
+            '&middot; combined view: <a href="dashboard.html">dashboard.html</a></p>'
+        )
+    else:
+        link = (
+            '<p>Single-venue focused views: '
+            '<a href="dashboard_polymarket.html">Polymarket</a> &middot; '
+            '<a href="dashboard_hyperliquid.html">Hyperliquid</a></p>'
+        )
+    return (
+        '<footer>\n'
+        f'  {link}\n'
+        '  <p>Built by Harry Winter &middot; '
+        'github.com/harrywinter06-code/polymarket-edge &middot; '
+        'view source for the README, REDTEAM, MICROSTRUCTURE.</p>\n'
+        '</footer>'
+    )
+
+
+def _build_html(
+    conn: sqlite3.Connection,
+    png_dir: Path,
+    *,
+    venue: str = "all",
+) -> str:
+    """Render the self-contained dashboard HTML for the given venue scope.
+
+    venue: 'all' (combined, default), 'polymarket', 'hyperliquid'.
+    """
+    if venue not in ("all", "polymarket", "hyperliquid"):
+        raise ValueError(f"unknown venue {venue!r}")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    test_count = _count_tests()
+
+    if venue == "polymarket":
+        title = "polymarket-edge &mdash; Polymarket microstructure dashboard"
+        blurb = _POLYMARKET_BLURB
+        kpi_grid = _polymarket_kpi_grid(conn, test_count)
+        sections = _polymarket_sections(conn)
+    elif venue == "hyperliquid":
+        title = "polymarket-edge &mdash; Hyperliquid funding-capture dashboard"
+        blurb = _HYPERLIQUID_BLURB
+        kpi_grid = _hyperliquid_kpi_grid(conn, test_count)
+        sections = _hyperliquid_sections(png_dir, conn)
+    else:  # all
+        title = "polymarket-edge &mdash; research dashboard"
+        blurb = _HEADER_BLURB
+        kpi_grid = _kpi_grid(conn, test_count)
+        sections = (
+            _hyperliquid_sections(png_dir, conn)
+            + _polymarket_sections(conn)
+        )
 
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>polymarket-edge — research dashboard</title>
+<title>{title}</title>
 <style>{_CSS}</style>
 </head>
 <body>
 <main class="container">
   <h1>polymarket-edge</h1>
   <p class="subtitle">Research dashboard &middot; generated {html.escape(now)}</p>
-  <p class="lead">{html.escape(_HEADER_BLURB)}</p>
+  <p class="lead">{html.escape(blurb)}</p>
 
   {kpi_grid}
+{sections}
+  {_limitations_section(venue)}
 
-  <h2>Hyperliquid — cumulative gross P&amp;L</h2>
-  {pnl_chart}
-
-  <h2>Hyperliquid — funding APR per coin</h2>
-  {apr_chart}
-
-  <h2>Polymarket — top flagged events</h2>
-  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown report uses.</p>
-  {flagged_table}
-
-  <h2 id="depth">Polymarket — depth-vs-trap (the headline finding)</h2>
-  <p>A top-of-book gap detector flags all three. The depth-aware basket model separates
-  the real signal from the marginal one from the trap.</p>
-  {depth_table}
-
-  <h2>Polymarket — live microstructure scan (by category)</h2>
-  <p class="muted">Populated by <code>polymarket-edge microstructure-scan</code>.
-  Each scan walks the book for every flagged negRisk event at $50 and $500
-  per market and assigns a verdict. Categories show where traps cluster.</p>
-  {micro_section}
-
-  <h2>Hyperliquid — gross strategy results</h2>
-  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h.</p>
-  {strategy_table}
-
-  <h2>Hyperliquid — hedge cost sensitivity</h2>
-  <p>5 bp per leg (20 bp round-trip) per rebalance. The headline +19% gross at 8h cadence
-  becomes -200% net; the cadence at which net annualized first crosses zero is highlighted.</p>
-  {hedge_table}
-
-  <section class="limitations">
-    <h2>Limitations</h2>
-    <p>Every headline number above is gross of execution cost on the Hyperliquid side and
-    top-of-book on the Polymarket side. The full self-audit lives in
-    <code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 365 days
-    (1,093 rebalances at the 8h cadence, 12 majors). Sharpe is the carry-only upper
-    bound &mdash; net of 5 bp/leg spread the 8h cadence collapses to &minus;207%;
-    deployable region is the &ge; 2-weekly slice of the cadence frontier.</p>
-  </section>
-
-  <footer>
-    Built by Harry Winter &middot; github.com/harrywinter06-code/polymarket-edge &middot;
-    view source for the README, REDTEAM, MICROSTRUCTURE.
-  </footer>
+  {_cross_link_footer(venue)}
 </main>
 </body>
 </html>
 """
 
 
-def write_dashboard(conn: sqlite3.Connection, out_path: str | Path) -> Path:
+def write_dashboard(
+    conn: sqlite3.Connection,
+    out_path: str | Path,
+    *,
+    venue: str = "all",
+) -> Path:
     """Render the self-contained HTML dashboard to `out_path` and return it.
 
-    Charts (`hl_cumulative_pnl.png`, `funding_apr_per_coin.png`) are read from
-    `out_path.parent` and base64-embedded inline; missing PNGs render as a
-    placeholder div instead of raising.
+    `venue` is one of 'all' (default, combined view), 'polymarket', or
+    'hyperliquid'. Each focused view shows only its venue's sections plus
+    a footer link to the other.
+
+    Charts (`hl_cumulative_pnl.png`, `funding_apr_per_coin.png`,
+    `cadence_frontier.png`) are read from `out_path.parent` and
+    base64-embedded inline; missing PNGs render as a placeholder div
+    instead of raising.
     """
     p = Path(out_path)
-    html_text = _build_html(conn, png_dir=p.parent)
+    html_text = _build_html(conn, png_dir=p.parent, venue=venue)
     p.write_text(html_text, encoding="utf-8")
     return p
