@@ -160,3 +160,35 @@ def test_plot_depth_decay_empty_writes_placeholder(tmp_path: Path) -> None:
     assert result == out
     assert out.exists()
     assert out.stat().st_size > 0
+
+
+def test_plot_cadence_frontier_renders(tmp_path: Path) -> None:
+    from polymarket_edge.hl_hedge import CadenceRow
+    from polymarket_edge.plots import plot_cadence_frontier
+
+    rows = [
+        CadenceRow(rebalance_hours=8, n_rebalances=100,
+                   gross_annualized=0.20, net_annualized=-2.0,
+                   net_sharpe=-5.0, breakeven_bps_per_leg=0.5),
+        CadenceRow(rebalance_hours=24, n_rebalances=33,
+                   gross_annualized=0.18, net_annualized=-0.50,
+                   net_sharpe=-2.0, breakeven_bps_per_leg=2.0),
+        CadenceRow(rebalance_hours=168, n_rebalances=10,
+                   gross_annualized=0.15, net_annualized=0.05,
+                   net_sharpe=0.5, breakeven_bps_per_leg=8.0),
+    ]
+    out = tmp_path / "cadence.png"
+    result = plot_cadence_frontier(rows, out, spread_bps_per_leg=5.0)
+    assert result == out
+    assert out.exists()
+    assert out.stat().st_size > MIN_PNG_BYTES
+
+
+def test_plot_cadence_frontier_empty_writes_placeholder(tmp_path: Path) -> None:
+    from polymarket_edge.plots import plot_cadence_frontier
+
+    out = tmp_path / "cadence_empty.png"
+    result = plot_cadence_frontier([], out)
+    assert result == out
+    assert out.exists()
+    assert out.stat().st_size > 0

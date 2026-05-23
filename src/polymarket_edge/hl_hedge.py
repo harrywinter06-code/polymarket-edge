@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import statistics
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from polymarket_edge.hl_backtest import (
     HOURS_PER_YEAR,
@@ -37,12 +38,16 @@ def _series_by_coin(ticks: Sequence[FundingTick]) -> dict[str, list[FundingTick]
     return out
 
 
-def _common_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
+def _union_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
+    """Union of timestamps. Per-coin completeness is enforced inside the
+    strategy loop's trailing/future window checks, so coins listed mid-period
+    don't drop earlier buckets from the grid (survivorship-aware)."""
     if not per_coin:
         return []
-    sets = [{t.t_ms for t in series} for series in per_coin.values()]
-    common = set.intersection(*sets) if sets else set()
-    return sorted(common)
+    out: set[int] = set()
+    for series in per_coin.values():
+        out.update(t.t_ms for t in series)
+    return sorted(out)
 
 
 def _maps(per_coin: dict[str, list[FundingTick]]) -> dict[str, dict[int, float]]:
@@ -128,7 +133,7 @@ def backtest_top_k_trailing_net_spread(
         f"_spread{spread_bps_per_leg}bp"
     )
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     if len(grid) < trailing_hours + rebalance_hours:
         return _summary(
             strategy=strategy,
@@ -192,3 +197,63 @@ def sweep_spread_sensitivity(
         )
         for s in spreads_bps
     ]
+
+
+@dataclass(frozen=True, slots=True)
+class CadenceRow:
+    """One row in the cadence-frontier table."""
+    rebalance_hours: int
+    n_rebalances: int
+    gross_annualized: float
+    net_annualized: float
+    net_sharpe: float
+    breakeven_bps_per_leg: float
+
+
+def cadence_frontier(
+    ticks: Sequence[FundingTick],
+    *,
+    cadences_hours: Sequence[int] = (8, 24, 72, 168, 336, 720),
+    top_k: int = 5,
+    trailing_hours: int = 24,
+    spread_bps_per_leg: float = 5.0,
+) -> list[CadenceRow]:
+    """For each rebalance cadence, compute gross & net annualised return
+    and the break-even cost-per-leg at which the net result crosses zero.
+
+    The break-even is solved analytically from the per-period gross mean:
+    net_per_period = gross_per_period - 4 * bps/10_000.
+    Setting net_per_period = 0 -> bps = 2500 * gross_per_period.
+    """
+    from polymarket_edge.hl_backtest import backtest_top_k_trailing
+
+    out: list[CadenceRow] = []
+    for cad in cadences_hours:
+        gross = backtest_top_k_trailing(
+            ticks,
+            top_k=top_k,
+            trailing_hours=trailing_hours,
+            rebalance_hours=cad,
+        )
+        net = backtest_top_k_trailing_net_spread(
+            ticks,
+            top_k=top_k,
+            trailing_hours=trailing_hours,
+            rebalance_hours=cad,
+            spread_bps_per_leg=spread_bps_per_leg,
+        )
+        n_reb = gross.n_rebalances
+        # Per-period gross mean -> break-even bps-per-leg.
+        gross_per_period = (gross.total_return / n_reb) if n_reb > 0 else 0.0
+        be_bps = 2500.0 * gross_per_period  # see docstring
+        out.append(
+            CadenceRow(
+                rebalance_hours=cad,
+                n_rebalances=n_reb,
+                gross_annualized=gross.annualized_return,
+                net_annualized=net.annualized_return,
+                net_sharpe=net.sharpe,
+                breakeven_bps_per_leg=be_bps,
+            )
+        )
+    return out

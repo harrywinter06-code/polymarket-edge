@@ -280,14 +280,30 @@ def _auc_mann_whitney(scores: list[float], labels: list[int]) -> float:
 def leave_one_out_cv(
     X: list[TrapFeatures],
     y: list[int],
+    *,
+    shuffle_labels: bool = False,
+    shuffle_seed: int = 0,
     **fit_kwargs: Any,
 ) -> LooCVResult:
-    """LOOCV: fit on N-1, predict the held-out sample, then summarise."""
+    """LOOCV: fit on N-1, predict the held-out sample, then summarise.
+
+    Pass ``shuffle_labels=True`` to get a negative-control AUC — the same
+    pipeline with the y vector permuted, which should produce AUC ~ 0.5 if
+    the model has no spurious-fitting capacity. The gap between the real AUC
+    and the shuffled-label AUC is the actual signal from the features (and
+    must be reported alongside the real AUC at low N to be honest).
+    """
     n = len(X)
     if n != len(y):
         raise ValueError("X and y length mismatch")
     if n < 3:
         raise ValueError(f"need at least 3 samples for LOOCV, got {n}")
+
+    if shuffle_labels:
+        import random as _random
+        rng = _random.Random(shuffle_seed)
+        y = list(y)
+        rng.shuffle(y)
 
     held_out_scores: list[float] = []
     held_out_labels: list[int] = []

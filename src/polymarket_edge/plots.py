@@ -125,12 +125,14 @@ def _series_by_coin(ticks: Sequence[FundingTick]) -> dict[str, list[FundingTick]
     return out
 
 
-def _common_grid(per_coin: Mapping[str, Sequence[FundingTick]]) -> list[int]:
+def _union_grid(per_coin: Mapping[str, Sequence[FundingTick]]) -> list[int]:
+    """Survivorship-aware grid (union of timestamps); matches hl_backtest."""
     if not per_coin:
         return []
-    sets = [{t.t_ms for t in series} for series in per_coin.values()]
-    common = set.intersection(*sets) if sets else set()
-    return sorted(common)
+    out: set[int] = set()
+    for series in per_coin.values():
+        out.update(t.t_ms for t in series)
+    return sorted(out)
 
 
 def _per_rebalance_returns_trailing(
@@ -144,7 +146,7 @@ def _per_rebalance_returns_trailing(
     return series alongside its end-of-interval timestamp. Matches the math in
     `hl_backtest.backtest_top_k_trailing` exactly."""
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     if len(grid) < trailing_hours + rebalance_hours:
         return [], []
     maps = {c: {t.t_ms: t.funding for t in s} for c, s in per_coin.items()}
@@ -186,7 +188,7 @@ def _per_rebalance_returns_perfect(
     rebalance_hours: int,
 ) -> tuple[list[int], list[float]]:
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     maps = {c: {t.t_ms: t.funding for t in s} for c, s in per_coin.items()}
     ts: list[int] = []
     rets: list[float] = []
@@ -504,6 +506,71 @@ def plot_depth_decay(
     _style_axes(ax, grid_axis="y")
     ax.legend(loc="best", fontsize=8, ncol=1)
     fig.tight_layout(pad=1.2)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=_SAVE_DPI, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+# ---------- (4) cadence frontier --------------------------------------------
+
+
+def plot_cadence_frontier(
+    rows: Sequence[object],
+    out_path: str | Path,
+    *,
+    spread_bps_per_leg: float = 5.0,
+) -> Path:
+    """Plot gross vs net annualised return as a function of rebalance cadence.
+
+    `rows` is an iterable of `hl_hedge.CadenceRow` (typed as `object` here to
+    avoid an import cycle between plots and hl_hedge). The chart's headline
+    is the cadence at which the net curve crosses zero — the break-even
+    cadence for the configured per-leg spread.
+    """
+    out = Path(out_path)
+    rows = list(rows)
+    if not rows:
+        return _save_placeholder(
+            out,
+            "Cadence frontier unavailable — run `polymarket-edge hl-cadence-frontier` "
+            "after loading funding history.",
+        )
+
+    cadences = [r.rebalance_hours for r in rows]
+    gross = [r.gross_annualized * 100 for r in rows]
+    net = [r.net_annualized * 100 for r in rows]
+    breakevens = [r.breakeven_bps_per_leg for r in rows]
+
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(8.5, 6.0), sharex=True,
+                                  gridspec_kw={"height_ratios": [2, 1]})
+
+    ax.plot(cadences, gross, marker="o", color=_PALETTE[4], linewidth=1.8,
+            label="gross annualised (%)")
+    ax.plot(cadences, net, marker="s", color=_PALETTE[3], linewidth=1.8,
+            label=f"net of {spread_bps_per_leg}bp/leg (%)")
+    ax.axhline(0, color=_PALETTE[1], linestyle="--", linewidth=0.7)
+    ax.set_ylabel("annualised return (%)", labelpad=8)
+    ax.set_title(
+        "cadence frontier  net carry becomes positive past the break-even rebalance period",
+        loc="left",
+        pad=10,
+    )
+    _style_axes(ax, grid_axis="y")
+    ax.legend(loc="best", fontsize=9)
+
+    ax2.bar([str(c) for c in cadences], breakevens, color=_PALETTE[5], width=0.6,
+            edgecolor="white", linewidth=0.5)
+    ax2.axhline(
+        spread_bps_per_leg, color=_PALETTE[3], linestyle="--", linewidth=0.8,
+        label=f"realistic {spread_bps_per_leg}bp/leg",
+    )
+    ax2.set_xlabel("rebalance cadence (hours)", labelpad=8)
+    ax2.set_ylabel("break-even bps/leg", labelpad=8)
+    _style_axes(ax2, grid_axis="y")
+    ax2.legend(loc="best", fontsize=8)
+
+    fig.tight_layout(pad=1.4)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=_SAVE_DPI, bbox_inches="tight")
     plt.close(fig)

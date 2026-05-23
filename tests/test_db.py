@@ -133,3 +133,68 @@ def test_upsert_market_round_trips_json_outcomes(tmp_conn: sqlite3.Connection) -
     db.upsert_market(tmp_conn, m, event_id="E1", fetched_at="2026-01-01T00:00:00+00:00")
     row = tmp_conn.execute("SELECT outcomes_json FROM markets WHERE id='M1'").fetchone()
     assert json.loads(row["outcomes_json"]) == ["Yes", "No"]
+
+
+def test_insert_book_snapshot_persists_levels_and_half_spread(
+    tmp_conn: sqlite3.Connection,
+) -> None:
+    db.insert_book_snapshot(
+        tmp_conn,
+        token_id="yes-1",
+        market_id="M1",
+        event_id="E1",
+        snapshot_at="2026-01-01T00:00:00+00:00",
+        bids=[(0.55, 100.0), (0.54, 50.0), (0.53, 25.0)],
+        asks=[(0.57, 200.0), (0.58, 150.0)],
+    )
+    row = tmp_conn.execute(
+        "SELECT * FROM book_snapshots WHERE token_id='yes-1'"
+    ).fetchone()
+    assert row["best_bid_price"] == 0.55
+    assert row["best_ask_price"] == 0.57
+    assert abs(row["half_spread"] - 0.01) < 1e-12
+    assert json.loads(row["bid_levels_json"]) == [
+        [0.55, 100.0], [0.54, 50.0], [0.53, 25.0]
+    ]
+
+
+def test_insert_book_snapshot_handles_empty_side(
+    tmp_conn: sqlite3.Connection,
+) -> None:
+    db.insert_book_snapshot(
+        tmp_conn,
+        token_id="yes-1",
+        market_id=None,
+        event_id=None,
+        snapshot_at="t",
+        bids=[(0.55, 100.0)],
+        asks=[],
+    )
+    row = tmp_conn.execute("SELECT * FROM book_snapshots").fetchone()
+    assert row["best_bid_price"] == 0.55
+    assert row["best_ask_price"] is None
+    assert row["half_spread"] is None
+
+
+def test_insert_hl_universe_snapshot_unique_per_coin_time(
+    tmp_conn: sqlite3.Connection,
+) -> None:
+    db.insert_hl_universe_snapshot(
+        tmp_conn, coin="BTC", sz_decimals=4, max_leverage=50,
+        open_interest=1000.0, snapshot_at="t1",
+    )
+    # Same (coin, snapshot_at) is silently ignored by INSERT OR IGNORE.
+    db.insert_hl_universe_snapshot(
+        tmp_conn, coin="BTC", sz_decimals=4, max_leverage=50,
+        open_interest=2000.0, snapshot_at="t1",
+    )
+    # Different snapshot_at: new row.
+    db.insert_hl_universe_snapshot(
+        tmp_conn, coin="BTC", sz_decimals=4, max_leverage=50,
+        open_interest=1500.0, snapshot_at="t2",
+    )
+    rows = tmp_conn.execute(
+        "SELECT snapshot_at, open_interest FROM hl_universe_snapshots "
+        "WHERE coin='BTC' ORDER BY snapshot_at"
+    ).fetchall()
+    assert [(r[0], r[1]) for r in rows] == [("t1", 1000.0), ("t2", 1500.0)]

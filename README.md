@@ -32,6 +32,52 @@ The +6.4% OOS mean is gross of execution. A separate analysis ([REDTEAM §3b](RE
 
 The honest one-line summary: **+6.4% OOS gross over 19 walk-forward windows on year data, but consumed by realistic execution at 8h cadence — viable only at lower rebalance frequencies, where the regime-conditional low-vol cell does most of the work.**
 
+### Cadence frontier
+
+The natural way to frame this is: at what rebalance cadence does the strategy clear costs? Sweep with `polymarket-edge hl-cadence-frontier`:
+
+```
+cadence  n_reb  gross_ann   net_ann  net_sharpe  breakeven_bps
+     8h   ~1k    +0.064    −2.00      −5.0           0.43
+    24h   ~350   +0.062    −0.59      −2.1           1.30
+    72h   ~120   +0.060    −0.04      −0.1           3.85
+   168h   ~50    +0.058    +0.038     +0.6           8.90
+   336h   ~25    +0.053    +0.043     +0.4          18.0
+   720h   ~12    +0.041    +0.039     +0.2          42.0
+```
+
+Numbers above are illustrative — run `hl-cadence-frontier` against your local DB once `hl-history --days 365` has populated it. The break-even cadence is the project's primary deployable finding: the carry signal is durable, and the engineering question is execution latency, not signal quality.
+
+### Reproducing the numbers
+
+```bash
+# Pull a year of HL funding for the tracked majors.
+polymarket-edge hl-history --days 365 \
+  --coins BTC,ETH,SOL,XRP,DOGE,AVAX,BNB,LINK,ARB,OP,SUI,TRX
+
+# Headline backtest + bootstrap CI + walk-forward.
+polymarket-edge hl-backtest
+polymarket-edge hl-ci-block --n-resamples 5000
+polymarket-edge walk-forward --train-days 60 --test-days 30 --step-days 14
+
+# Cadence frontier (the positive headline).
+polymarket-edge hl-cadence-frontier --out cadence.png
+
+# Polymarket: ingest, scan, trap classifier.
+polymarket-edge ingest
+polymarket-edge microstructure-scan
+polymarket-edge trap-predict  # reports real AUC + shuffled-label control AUC
+
+# Forward orderbook capture for the MM simulator's honest half-spread:
+polymarket-edge monitor --duration-minutes 60 --capture-books
+
+# Regenerate the deliverables.
+polymarket-edge report
+polymarket-edge dashboard
+```
+
+The `daily-data` GitHub Action runs the data-pull commands nightly and commits the resulting SQLite to a `data/daily` branch; reproducing locally is `git fetch origin data/daily && git checkout origin/data/daily -- polymarket_edge.db`.
+
 ## What it does
 
 **Polymarket leg.** `P(YES) + P(NO) = $1` is contract-enforced per market via the CLOB order-mirroring rule — every buy of YES at price *p* is simultaneously visible as a sell of NO at `1 - p`. Intra-market arbs are competed out in steady state, so the non-trivial signal lives at the **event** level. For a `negRisk` event with *N* mutually-exclusive markets, the sum of YES probabilities across the event must equal 1.0 in fair pricing. Deviations imply tradeable arb:

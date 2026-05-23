@@ -91,14 +91,30 @@ def test_ingest_command(db_path: Path, patch_events) -> None:
 
 
 def test_scan_command(db_path: Path, patch_events) -> None:
-    # `scan` writes arb-signal rows with a FK to events, so we ingest first.
-    ingest_res = runner.invoke(cli.app, ["ingest", "--db-path", str(db_path)])
-    assert ingest_res.exit_code == 0, ingest_res.output
     result = runner.invoke(
         cli.app, ["scan", "--db-path", str(db_path), "--fee-buffer", "0.0"]
     )
     assert result.exit_code == 0, result.output
     assert "scored" in result.output
+
+
+def test_scan_command_upserts_events_for_signal_fk(
+    db_path: Path, patch_events
+) -> None:
+    """scan must upsert events itself — without a prior ingest the signal FK
+    would otherwise fail."""
+    from polymarket_edge import db as db_module
+
+    result = runner.invoke(
+        cli.app, ["scan", "--db-path", str(db_path), "--fee-buffer", "0.0"]
+    )
+    assert result.exit_code == 0, result.output
+    conn = db_module.connect(db_path)
+    n_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    n_signals = conn.execute("SELECT COUNT(*) FROM event_arb_signals").fetchone()[0]
+    conn.close()
+    assert n_events >= 1
+    assert n_signals >= 1
 
 
 def test_stats_command_on_empty_db(db_path: Path) -> None:
@@ -194,6 +210,8 @@ def test_depth_command_happy_path(
 
 
 def test_hl_ingest_command(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from polymarket_edge import db as db_module
+
     universe = [{"name": "BTC", "szDecimals": 4, "maxLeverage": 50, "marginTableId": 1}]
     ctxs = [{"funding": "0.0001", "markPx": "60000", "openInterest": "1000"}]
 
@@ -205,6 +223,13 @@ def test_hl_ingest_command(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     result = runner.invoke(cli.app, ["hl-ingest", "--db-path", str(db_path)])
     assert result.exit_code == 0, result.output
     assert "snapshot:" in result.output
+    # Should have written a time-keyed universe snapshot for survivorship analysis.
+    conn = db_module.connect(db_path)
+    n_uni = conn.execute(
+        "SELECT COUNT(*) FROM hl_universe_snapshots WHERE coin='BTC'"
+    ).fetchone()[0]
+    conn.close()
+    assert n_uni == 1
 
 
 def test_hl_history_command_explicit_coins(
@@ -273,6 +298,30 @@ def test_hl_ci_block_command(db_path: Path) -> None:
 
 def test_hl_ci_block_command_no_funding(db_path: Path) -> None:
     result = runner.invoke(cli.app, ["hl-ci-block", "--db-path", str(db_path)])
+    assert result.exit_code == 1
+
+
+def test_hl_cadence_frontier_command(db_path: Path) -> None:
+    _seed_funding(db_path, n_ticks=200)
+    out_png = db_path.parent / "cadence.png"
+    result = runner.invoke(
+        cli.app,
+        [
+            "hl-cadence-frontier",
+            "--db-path", str(db_path),
+            "--cadences", "8,24,72",
+            "--out", str(out_png),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "cadence" in result.output
+    assert out_png.exists()
+
+
+def test_hl_cadence_frontier_command_no_funding(db_path: Path) -> None:
+    result = runner.invoke(
+        cli.app, ["hl-cadence-frontier", "--db-path", str(db_path)]
+    )
     assert result.exit_code == 1
 
 

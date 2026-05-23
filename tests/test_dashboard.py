@@ -79,6 +79,47 @@ def test_dashboard_writes_self_contained_html(
     )
 
 
+def test_dashboard_renders_microstructure_section(
+    tmp_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """When microstructure_classifications rows exist, the dashboard surfaces
+    per-category trap-rate aggregates from the most recent scan."""
+    classified_at = datetime.now(UTC).isoformat()
+    rows = [
+        ("scan-1", "E1", "ev1", "Ev1", "Sports", 3, "sell_yes", 0.05, 0.04, 0.03, "real"),
+        ("scan-1", "E2", "ev2", "Ev2", "Sports", 3, "sell_yes", 0.05, -0.02, -0.05, "trap"),
+        ("scan-1", "E3", "ev3", "Ev3", "Politics", 2, "sell_yes", 0.05, -0.10, -0.20, "trap"),
+        ("scan-1", "E4", "ev4", "Ev4", "Politics", 2, "buy_yes", 0.04, 0.02, 0.001, "marginal"),
+    ]
+    for scan, ev, slug, title, cat, n, dirn, top_g, gs, gm, verdict in rows:
+        tmp_conn.execute(
+            """INSERT INTO microstructure_classifications
+               (scan_id, event_id, event_slug, event_title, category_tag,
+                n_markets, neg_risk_augmented, direction, top_of_book_gap,
+                gap_at_small_size, gap_at_med_size, throttle_notional_usd,
+                verdict, classified_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 100.0, ?, ?)""",
+            (scan, ev, slug, title, cat, n, dirn, top_g, gs, gm, verdict, classified_at),
+        )
+    tmp_conn.commit()
+    out = tmp_path / "dashboard.html"
+    write_dashboard(tmp_conn, out)
+    text = out.read_text(encoding="utf-8")
+    assert "live microstructure scan" in text
+    assert "Sports" in text and "Politics" in text
+    assert "trap rate" in text.lower()
+    assert "scan-1" in text
+
+
+def test_dashboard_microstructure_section_falls_back_when_empty(
+    tmp_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    out = tmp_path / "dashboard.html"
+    write_dashboard(tmp_conn, out)
+    text = out.read_text(encoding="utf-8")
+    assert "No microstructure-scan rows yet" in text
+
+
 def test_dashboard_handles_missing_pngs(
     tmp_conn: sqlite3.Connection, tmp_path: Path
 ) -> None:

@@ -1,0 +1,93 @@
+name: daily-data
+
+# Daily data accumulation for the small-N gaps called out in REDTEAM.md:
+#
+#   - hl-ingest: one Hyperliquid universe + funding snapshot per day. Runs
+#     `db.insert_hl_universe_snapshot` so backtests can ask "which coins
+#     existed at time t?" — the survivorship correction.
+#   - hl-history: pulls the last 2 days of funding for the tracked majors
+#     (2-day window for safe dedupe via INSERT OR IGNORE). Over weeks the
+#     table grows to a year by itself.
+#   - microstructure-scan: one new scan per day grows the trap-rate N from
+#     the original 19 toward something model-grade.
+#
+# The DB is persisted to the `data/daily` branch so each daily snapshot is
+# reproducible from git.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # daily, 03:17 UTC (off-peak for both venues)
+  workflow_dispatch:        # also allow manual triggering
+
+permissions:
+  contents: write
+
+jobs:
+  pull-and-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main (for source)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore previous DB from data/daily branch
+        run: |
+          if git fetch origin data/daily 2>/dev/null; then
+            git checkout origin/data/daily -- polymarket_edge.db || true
+            echo "restored prior DB"
+          else
+            echo "no data/daily branch yet — starting fresh"
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Hyperliquid — universe + funding snapshot
+        run: uv run polymarket-edge hl-ingest --db-path polymarket_edge.db
+
+      - name: Hyperliquid — pull 2 days of funding (overlap is deduped)
+        run: |
+          uv run polymarket-edge hl-history \
+            --db-path polymarket_edge.db \
+            --coins BTC,ETH,SOL,XRP,DOGE,AVAX,BNB,LINK,ARB,OP,SUI,TRX \
+            --days 2
+
+      - name: Polymarket — microstructure scan
+        run: |
+          uv run polymarket-edge microstructure-scan \
+            --db-path polymarket_edge.db \
+            --max-events 500 \
+            --small-size-usd 50 \
+            --med-size-usd 500
+        continue-on-error: true
+
+      - name: Commit DB to data/daily branch
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Switch to data/daily, carrying only the DB file across.
+          if git ls-remote --exit-code --heads origin data/daily; then
+            git fetch origin data/daily
+            git checkout data/daily
+          else
+            git checkout --orphan data/daily
+            git rm -rf . > /dev/null 2>&1 || true
+          fi
+          git add -f polymarket_edge.db
+          if git diff --cached --quiet; then
+            echo "no DB changes to commit"
+          else
+            git commit -m "daily snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push origin HEAD:data/daily
+          fi

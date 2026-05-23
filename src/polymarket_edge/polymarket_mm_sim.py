@@ -45,6 +45,14 @@ RATE_LIMIT_SECONDS = 0.25
 MAX_OFFSET = 3000              # server-enforced; see module docstring
 PAGE_SIZE = 500
 
+# Polymarket CLOB tick size is $0.01. The half-spread proxy looks at realised
+# price drift between trades and a fixed-horizon future trade; in low-volume
+# markets that gap can reflect news or fat-finger inventory clear-outs rather
+# than the inside spread. Clip each delta at 2 * tick = $0.02 so a single
+# tail event can't dominate the per-market mean.
+PRICE_TICK = 0.01
+HALF_SPREAD_DELTA_CLIP = 2 * PRICE_TICK
+
 
 @dataclass(frozen=True, slots=True)
 class Trade:
@@ -112,10 +120,16 @@ INFORMED_SCENARIO = AdverseSelectionScenario(
     realized_half_spread_fraction=1.0,
     description="maker pays full spread on every fill — pessimistic",
 )
+PESSIMISTIC_SCENARIO = AdverseSelectionScenario(
+    name="pessimistic",
+    realized_half_spread_fraction=1.5,
+    description="maker pays 1.5x spread (toxic flow concentrated against you)",
+)
 SCENARIOS: tuple[AdverseSelectionScenario, ...] = (
     NAIVE_SCENARIO,
     MODERATE_SCENARIO,
     INFORMED_SCENARIO,
+    PESSIMISTIC_SCENARIO,
 )
 
 
@@ -215,19 +229,28 @@ async def fetch_trades_for_event(
 # Simulator -----------------------------------------------------------------
 
 
-def estimate_half_spread(trades: list[Trade], *, window_minutes: int = 5) -> float:
+def estimate_half_spread(
+    trades: list[Trade],
+    *,
+    window_minutes: int = 5,
+    clip_delta: float | None = HALF_SPREAD_DELTA_CLIP,
+) -> float:
     """Estimate the typical half-spread as the mean absolute price change
     over a ``window_minutes`` window following each trade, divided by two.
 
     Without orderbook snapshots this is the cleanest proxy: in a competitive
-    book the spread is implied by realized price drift between adjacent trades.
+    book the spread is implied by realised price drift between adjacent trades.
     Returned in price-points (decimal in [0, 1]), so a half-spread of 0.005
     means $0.005 per share.
 
     Uses mean (not median) because Polymarket prices are quantized at $0.01
-    and many 5-min windows see zero realized change at the median; the mean
+    and many 5-min windows see zero realised change at the median; the mean
     of absolute changes captures the actual reverting flow that informs the
     spread.
+
+    Each delta is clipped to ``clip_delta`` (default 2 * tick = $0.02) so a
+    single news-driven or inventory-clear-out fill doesn't dominate the mean
+    on low-volume markets. Pass ``clip_delta=None`` to disable.
     """
     if len(trades) < 2:
         return 0.0
@@ -242,7 +265,10 @@ def estimate_half_spread(trades: list[Trade], *, window_minutes: int = 5) -> flo
             j += 1
         if j >= len(sorted_t):
             break
-        deltas.append(abs(sorted_t[j].price - ti.price))
+        d = abs(sorted_t[j].price - ti.price)
+        if clip_delta is not None:
+            d = min(d, clip_delta)
+        deltas.append(d)
     if not deltas:
         return 0.0
     return sum(deltas) / len(deltas) / 2.0

@@ -141,6 +141,72 @@ def insert_arb_signal(
     )
 
 
+def insert_book_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    token_id: str,
+    market_id: str | None,
+    event_id: str | None,
+    snapshot_at: str,
+    bids: list[tuple[float, float]],
+    asks: list[tuple[float, float]],
+    top_n_levels: int = 5,
+) -> None:
+    """Persist one orderbook snapshot for forward half-spread / depth analysis.
+
+    `bids` / `asks` are lists of (price, size) sorted best-first (bids
+    descending, asks ascending). Only the top `top_n_levels` are persisted as
+    JSON to keep row size bounded.
+    """
+    best_bid_p, best_bid_s = (bids[0] if bids else (None, None))
+    best_ask_p, best_ask_s = (asks[0] if asks else (None, None))
+    half_spread = (
+        (best_ask_p - best_bid_p) / 2.0
+        if best_bid_p is not None and best_ask_p is not None
+        else None
+    )
+    conn.execute(
+        """
+        INSERT INTO book_snapshots
+        (token_id, market_id, event_id, snapshot_at,
+         best_bid_price, best_bid_size, best_ask_price, best_ask_size,
+         bid_levels_json, ask_levels_json, half_spread)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            token_id, market_id, event_id, snapshot_at,
+            best_bid_p, best_bid_s, best_ask_p, best_ask_s,
+            json.dumps([[p, s] for p, s in bids[:top_n_levels]]),
+            json.dumps([[p, s] for p, s in asks[:top_n_levels]]),
+            half_spread,
+        ),
+    )
+
+
+def insert_hl_universe_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    coin: str,
+    sz_decimals: int | None,
+    max_leverage: int | None,
+    open_interest: float | None,
+    snapshot_at: str,
+) -> None:
+    """Persist a single coin's universe state at a point in time.
+
+    Time-keyed so a survivorship-corrected backtest can ask "which coins
+    existed at time t?" instead of relying on the current snapshot.
+    """
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO hl_universe_snapshots
+        (coin, sz_decimals, max_leverage, open_interest, snapshot_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (coin, sz_decimals, max_leverage, open_interest, snapshot_at),
+    )
+
+
 def _parse_token_ids(raw: Any) -> list[str]:
     if raw is None:
         return []

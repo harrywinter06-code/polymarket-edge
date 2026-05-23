@@ -38,12 +38,14 @@ def _series_by_coin(ticks: Sequence[FundingTick]) -> dict[str, list[FundingTick]
     return out
 
 
-def _common_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
+def _union_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
+    """Survivorship-aware grid (union of timestamps)."""
     if not per_coin:
         return []
-    sets = [{t.t_ms for t in series} for series in per_coin.values()]
-    common = set.intersection(*sets) if sets else set()
-    return sorted(common)
+    out: set[int] = set()
+    for series in per_coin.values():
+        out.update(t.t_ms for t in series)
+    return sorted(out)
 
 
 def _maps(per_coin: dict[str, list[FundingTick]]) -> dict[str, dict[int, float]]:
@@ -135,7 +137,7 @@ def backtest_funding_momentum(
         raise ValueError("short_window_hours must be <= long_window_hours")
 
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     if len(grid) < long_window_hours + rebalance_hours:
         return _summary(
             strategy=strategy,

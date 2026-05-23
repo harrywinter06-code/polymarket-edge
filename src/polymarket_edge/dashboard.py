@@ -247,6 +247,79 @@ def _hedge_cost_table(conn: sqlite3.Connection) -> str:
     )
 
 
+def _microstructure_section(conn: sqlite3.Connection) -> str:
+    """Render live microstructure-scan aggregates from the most recent scan.
+
+    Falls back to a placeholder telling the reader to run
+    `polymarket-edge microstructure-scan` if no rows exist. Reads from the
+    `microstructure_classifications` table populated by `scan_and_classify`.
+    """
+    latest_scan = conn.execute(
+        "SELECT scan_id, MAX(classified_at) AS ts "
+        "FROM microstructure_classifications "
+        "GROUP BY scan_id ORDER BY ts DESC LIMIT 1"
+    ).fetchone()
+    if latest_scan is None:
+        return (
+            '<p class="muted">No microstructure-scan rows yet. '
+            "Run <code>polymarket-edge microstructure-scan</code> to populate.</p>"
+        )
+    scan_id = latest_scan[0]
+
+    overall = conn.execute(
+        "SELECT verdict, COUNT(*) FROM microstructure_classifications "
+        "WHERE scan_id = ? GROUP BY verdict",
+        (scan_id,),
+    ).fetchall()
+    counts = {v: n for v, n in overall}
+    total = sum(counts.values())
+    if total == 0:
+        return '<p class="muted">No classifications in the most recent scan.</p>'
+    real = counts.get("real", 0)
+    marginal = counts.get("marginal", 0)
+    trap = counts.get("trap", 0)
+    trap_rate = (trap / total * 100) if total else 0.0
+
+    by_cat = conn.execute(
+        "SELECT category_tag, "
+        "  SUM(CASE WHEN verdict='real' THEN 1 ELSE 0 END) AS n_real, "
+        "  SUM(CASE WHEN verdict='marginal' THEN 1 ELSE 0 END) AS n_marg, "
+        "  SUM(CASE WHEN verdict='trap' THEN 1 ELSE 0 END) AS n_trap, "
+        "  COUNT(*) AS n_total "
+        "FROM microstructure_classifications "
+        "WHERE scan_id = ? AND verdict != 'noise' "
+        "GROUP BY category_tag "
+        "ORDER BY n_total DESC LIMIT 10",
+        (scan_id,),
+    ).fetchall()
+
+    rows_html: list[str] = []
+    for cat, n_real, n_marg, n_trap, n_total in by_cat:
+        cat_rate = (n_trap / n_total * 100) if n_total else 0.0
+        rows_html.append(
+            f"<tr><td>{html.escape(cat or 'Uncategorized')}</td>"
+            f"<td class='num'>{n_total}</td>"
+            f"<td class='num'>{n_real}</td>"
+            f"<td class='num'>{n_marg}</td>"
+            f"<td class='num'>{n_trap}</td>"
+            f"<td class='num'>{cat_rate:.1f}%</td></tr>"
+        )
+
+    return (
+        f"<p class='muted'>Latest scan: <code>{html.escape(scan_id)}</code> &middot; "
+        f"<strong>{total}</strong> events classified &middot; "
+        f"<strong>{real}</strong> real, <strong>{marginal}</strong> marginal, "
+        f"<strong>{trap}</strong> trap &middot; "
+        f"overall trap rate <strong>{trap_rate:.1f}%</strong>.</p>"
+        "<table><thead><tr>"
+        "<th>Category</th><th>Total</th><th>Real</th><th>Marginal</th>"
+        "<th>Trap</th><th>Trap rate</th>"
+        "</tr></thead><tbody>"
+        + "".join(rows_html) +
+        "</tbody></table>"
+    )
+
+
 def _count_tests() -> int:
     """Best-effort test count via `pytest --collect-only -q`. Falls back to 40."""
     try:
@@ -385,6 +458,7 @@ def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
     depth_table = _depth_table()
     strategy_table = _hl_strategy_table(conn)
     hedge_table = _hedge_cost_table(conn)
+    micro_section = _microstructure_section(conn)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -416,6 +490,12 @@ def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
   <p>A top-of-book gap detector flags all three. The depth-aware basket model separates
   the real signal from the marginal one from the trap.</p>
   {depth_table}
+
+  <h2>Polymarket — live microstructure scan (by category)</h2>
+  <p class="muted">Populated by <code>polymarket-edge microstructure-scan</code>.
+  Each scan walks the book for every flagged negRisk event at $50 and $500
+  per market and assigns a verdict. Categories show where traps cluster.</p>
+  {micro_section}
 
   <h2>Hyperliquid — gross strategy results</h2>
   <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h.</p>

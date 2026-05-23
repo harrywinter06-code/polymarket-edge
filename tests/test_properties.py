@@ -175,3 +175,112 @@ def test_forward_test_empty_returns_zero() -> None:
     ft = forward_test([])
     assert ft.n_entries == 0
     assert ft.mean_realized_gap_at_close == 0.0
+
+
+# ---------------------------------------------------------------------------
+# MM simulator properties
+# ---------------------------------------------------------------------------
+
+
+def _random_trades(rng: random.Random, n: int):
+    from polymarket_edge.polymarket_mm_sim import Trade
+
+    base_ts = 1_700_000_000
+    out = []
+    price = rng.uniform(0.2, 0.8)
+    for i in range(n):
+        price = max(0.01, min(0.99, price + rng.gauss(0, 0.005)))
+        out.append(
+            Trade(
+                token_id="t",
+                timestamp_s=base_ts + i * 60,
+                price=price,
+                size_shares=rng.uniform(1.0, 100.0),
+                taker_side="BUY" if rng.random() < 0.5 else "SELL",
+            )
+        )
+    return out
+
+
+@pytest.mark.parametrize("seed", _seeds())
+def test_mm_basket_equals_sum_of_per_market(seed: int) -> None:
+    """A basket's total P&L equals the sum of per-market P&Ls — additivity."""
+    from polymarket_edge.polymarket_mm_sim import (
+        MODERATE_SCENARIO,
+        simulate_basket,
+        simulate_market_maker,
+    )
+
+    rng = random.Random(seed)
+    trades_by = {
+        f"tok-{i}": _random_trades(rng, rng.randint(20, 80))
+        for i in range(rng.randint(2, 5))
+    }
+    basket = simulate_basket(
+        trades_by,
+        {tok: f"q-{tok}" for tok in trades_by},
+        scenario=MODERATE_SCENARIO,
+        event_slug="ev",
+        event_title="ev",
+        days_to_resolution=10.0,
+    )
+    sum_net = sum(
+        simulate_market_maker(t, scenario=MODERATE_SCENARIO, token_id=tok).net_pnl_usd
+        for tok, t in trades_by.items()
+    )
+    assert math.isclose(basket.total_net_pnl_usd, sum_net, rel_tol=1e-9, abs_tol=1e-12)
+
+
+@pytest.mark.parametrize("seed", _seeds())
+def test_mm_breakeven_zeroes_net_pnl(seed: int) -> None:
+    """Applying the breakeven AS fraction as the scenario must produce net ~= 0
+    on the basket. This is the contract of `breakeven_half_spread_fraction`."""
+    from polymarket_edge.polymarket_mm_sim import (
+        AdverseSelectionScenario,
+        breakeven_half_spread_fraction,
+        simulate_basket,
+    )
+
+    rng = random.Random(seed)
+    trades_by = {
+        f"tok-{i}": _random_trades(rng, rng.randint(40, 120))
+        for i in range(rng.randint(2, 4))
+    }
+    frac = breakeven_half_spread_fraction(trades_by)
+    if frac == float("inf"):
+        return  # zero-spread realization; trivially satisfied
+    scenario = AdverseSelectionScenario(
+        name="be", realized_half_spread_fraction=frac, description=""
+    )
+    basket = simulate_basket(
+        trades_by,
+        {tok: tok for tok in trades_by},
+        scenario=scenario,
+        event_slug="ev", event_title="ev", days_to_resolution=1.0,
+    )
+    # Tolerance: per-market math has small floating-point error; the sum across
+    # several markets accumulates a few ulp of drift.
+    assert abs(basket.total_net_pnl_usd) < 1e-6, (
+        f"breakeven didn't zero net pnl: {basket.total_net_pnl_usd}"
+    )
+
+
+@pytest.mark.parametrize("seed", _seeds())
+def test_mm_capture_fraction_scales_linearly_in_naive_scenario(seed: int) -> None:
+    """At AS=0, net P&L is proportional to capture fraction."""
+    from polymarket_edge.polymarket_mm_sim import (
+        NAIVE_SCENARIO,
+        simulate_market_maker,
+    )
+
+    rng = random.Random(seed)
+    trades = _random_trades(rng, 80)
+    half = simulate_market_maker(
+        trades, scenario=NAIVE_SCENARIO, sole_maker_capture_fraction=0.5
+    )
+    quarter = simulate_market_maker(
+        trades, scenario=NAIVE_SCENARIO, sole_maker_capture_fraction=0.25
+    )
+    assert math.isclose(
+        half.net_pnl_usd, 2 * quarter.net_pnl_usd, rel_tol=1e-9, abs_tol=1e-12
+    )

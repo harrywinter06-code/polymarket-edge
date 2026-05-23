@@ -209,3 +209,37 @@ CREATE TABLE IF NOT EXISTS hl_perp_candles (
 
 CREATE INDEX IF NOT EXISTS idx_hl_candles_coin_t ON hl_perp_candles(coin, t);
 
+-- ---------- forward-only orderbook snapshots (for honest half-spread / depth analysis) ----------
+
+CREATE TABLE IF NOT EXISTS book_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL,                -- YES token id
+    market_id TEXT,
+    event_id TEXT,
+    snapshot_at TEXT NOT NULL,
+    best_bid_price REAL,
+    best_bid_size REAL,
+    best_ask_price REAL,
+    best_ask_size REAL,
+    bid_levels_json TEXT,                  -- JSON [[price, size], ...] top-N bids
+    ask_levels_json TEXT,                  -- JSON [[price, size], ...] top-N asks
+    half_spread REAL                       -- (best_ask - best_bid) / 2; NULL if either side empty
+);
+
+CREATE INDEX IF NOT EXISTS idx_book_snap_token_time ON book_snapshots(token_id, snapshot_at);
+CREATE INDEX IF NOT EXISTS idx_book_snap_event_time ON book_snapshots(event_id, snapshot_at);
+
+-- ---------- hyperliquid universe snapshot, time-keyed (for survivorship correction) ----------
+
+CREATE TABLE IF NOT EXISTS hl_universe_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin TEXT NOT NULL,
+    sz_decimals INTEGER,
+    max_leverage INTEGER,
+    open_interest REAL,
+    snapshot_at TEXT NOT NULL,
+    UNIQUE (coin, snapshot_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_hl_uni_snap ON hl_universe_snapshots(snapshot_at);
+

@@ -78,20 +78,54 @@ def test_sharpe_zero_on_constant_returns() -> None:
     assert r.sharpe == 0.0
 
 
-def test_grid_intersection_skips_periods_lacking_data_for_any_held_coin() -> None:
-    """Sanity-check that the common-timestamp-grid construction guarantees
-    every held coin has data over the rebalance window, so the per-coin
-    completeness check in the loop is defensive but not load-bearing.
+def test_survivorship_aware_grid_includes_short_listed_coin() -> None:
+    """The grid is the *union* of timestamps; a coin missing the late slice
+    of the window doesn't drop the late buckets for the coins that do have
+    data. Eligibility is enforced per-bucket inside the strategy loop.
 
-    Setup: BTC has 32 hours; ETH has 28. The intersection grid has 28 ticks;
-    at i=24 the requested future window is grid[24:32] = 8 ticks but only 4
-    are available, so the outer loop's `i + rebalance_hours <= len(grid)`
-    guard rejects the period entirely. No partial-data inflation can occur.
+    Setup: BTC has 32 hourly ticks; ETH has only the first 28 (delisted, or
+    arrived late). At rebalance i=24 the future window is hours [24, 32).
+    BTC has full future-window data; ETH does not. The strategy holds top-2
+    by trailing mean (both qualify on the trailing window [0, 24)), but the
+    realised P&L is averaged over only the coins that have full future data
+    — so the rebalance counts and contributes BTC's funding (0.0008).
     """
     btc = _grid("BTC", [0.0001] * 32)
     eth = _grid("ETH", [0.0002] * 28)
     r = backtest_top_k_trailing(
         btc + eth, top_k=2, trailing_hours=24, rebalance_hours=8
     )
-    assert r.n_rebalances == 0
-    assert r.total_return == 0.0
+    assert r.n_rebalances == 1
+    # ETH had higher trailing mean and is held, but only BTC has future data.
+    # Realised P&L is BTC's 8h sum (0.0008) averaged over the 1 coin that
+    # actually had the future window.
+    assert abs(r.total_return - 0.0008) < 1e-12
+
+
+def test_survivorship_correction_doesnt_inflate_when_coin_arrives_late() -> None:
+    """If a high-funding coin is only available for the tail of the window,
+    earlier rebalances must NOT see it (no look-ahead) and later rebalances
+    must include it as a candidate when its trailing window is complete.
+
+    BTC: 64 hours of 0.0001. NEW: hours [40, 64) of 0.0010.
+
+    With trailing_hours=24, rebalance_hours=8, top_k=1:
+      - i=24: NEW has 0 trailing-window ticks (window [0, 24)); only BTC qualifies.
+      - i=32: NEW has 0 ticks in window [8, 32) until hour 40 — still doesn't qualify.
+      - i=48: NEW has trailing window [24, 48) with 8 ticks (hours 40-47), not 24
+              -> doesn't qualify (require full trailing window).
+      - i=56: NEW has [32, 56) with 16 ticks -> doesn't qualify.
+      - At no point does NEW qualify for top-1 — BTC wins every rebalance.
+    """
+    btc = _grid("BTC", [0.0001] * 64)
+    new_coin = [
+        FundingTick("NEW", i * 3_600_000, 0.0010)
+        for i in range(40, 64)
+    ]
+    r = backtest_top_k_trailing(
+        btc + new_coin, top_k=1, trailing_hours=24, rebalance_hours=8
+    )
+    # All held positions should be BTC; NEW never qualifies for trailing.
+    assert r.n_distinct_coins_held == 1
+    # Five rebalance buckets fit in 64 hours minus 24 trailing.
+    assert r.n_rebalances == 5

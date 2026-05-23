@@ -11,6 +11,7 @@ from polymarket_edge.hl_backtest import (
 )
 from polymarket_edge.hl_hedge import (
     backtest_top_k_trailing_net_spread,
+    cadence_frontier,
     sweep_spread_sensitivity,
 )
 
@@ -95,3 +96,40 @@ def test_extreme_spread_turns_positive_carry_negative() -> None:
     )
     assert r.n_rebalances > 0
     assert r.annualized_return < 0
+
+
+def test_cadence_frontier_returns_one_row_per_cadence() -> None:
+    ticks = _two_coin_universe()
+    rows = cadence_frontier(
+        ticks,
+        cadences_hours=(8, 24, 72),
+        top_k=1,
+        trailing_hours=24,
+        spread_bps_per_leg=5.0,
+    )
+    assert [r.rebalance_hours for r in rows] == [8, 24, 72]
+    # Each row carries the four headline numbers.
+    for r in rows:
+        assert isinstance(r.gross_annualized, float)
+        assert isinstance(r.net_annualized, float)
+        assert isinstance(r.net_sharpe, float)
+        assert isinstance(r.breakeven_bps_per_leg, float)
+
+
+def test_cadence_frontier_breakeven_solves_net_equals_zero() -> None:
+    """breakeven_bps_per_leg * per_period_gross math: setting the spread to
+    the reported breakeven should produce net annualised ~ 0."""
+    ticks = _two_coin_universe()
+    rows = cadence_frontier(
+        ticks, cadences_hours=(8,), top_k=1, trailing_hours=24,
+        spread_bps_per_leg=0.0,
+    )
+    if rows[0].breakeven_bps_per_leg <= 0:
+        # Constant-positive carry can produce a tiny / non-positive BE; skip.
+        return
+    # Re-run at the reported breakeven and verify net ~ 0.
+    r_be = backtest_top_k_trailing_net_spread(
+        ticks, top_k=1, trailing_hours=24, rebalance_hours=8,
+        spread_bps_per_leg=rows[0].breakeven_bps_per_leg,
+    )
+    assert abs(r_be.annualized_return) < 1e-6

@@ -10,7 +10,7 @@ import pytest
 
 from polymarket_edge import fetch, monitor
 
-from .conftest import make_event
+from .conftest import make_event, make_market
 
 
 def test_now_iso_is_parseable() -> None:
@@ -137,3 +137,119 @@ def test_fetch_trajectories_no_filter_returns_all(tmp_conn: sqlite3.Connection) 
     tmp_conn.commit()
     rows = monitor.fetch_trajectories(tmp_conn)
     assert len(rows) == 1
+
+
+def test_run_monitor_captures_books_for_flagged_events(
+    tmp_db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With capture_books_for_flagged=True, the loop writes a book_snapshots
+    row per active market for events whose detector best_gap clears the
+    threshold. Unflagged events do NOT trigger a book fetch."""
+    from polymarket_edge import book_depth
+    from polymarket_edge import db as db_module
+    from polymarket_edge.book_depth import Level, MarketBook
+
+    # Wide-sell event (gap ~0.15) -> flagged.
+    flagged = make_event(
+        "E-FLAG",
+        markets=[
+            make_market("m1", best_bid=0.60, best_ask=0.61),
+            make_market("m2", best_bid=0.55, best_ask=0.56),
+        ],
+    )
+    # Fair event -> not flagged.
+    fair = make_event(
+        "E-FAIR",
+        slug="fair",
+        markets=[
+            make_market("m3", best_bid=0.50, best_ask=0.51),
+            make_market("m4", best_bid=0.50, best_ask=0.51),
+        ],
+    )
+
+    async def fake_fetch(**kwargs):
+        return [flagged, fair]
+
+    async def fake_books(markets, **kwargs):
+        out = {}
+        for m in markets:
+            yes = m["clobTokenIds"].strip("[]").replace('"', "").split(",")[0].strip()
+            out[yes] = MarketBook(
+                token_id=yes,
+                bids=[Level(0.60, 100.0), Level(0.59, 50.0)],
+                asks=[Level(0.61, 100.0)],
+            )
+        return out
+
+    monkeypatch.setattr(monitor.fetch, "fetch_all_active_events", fake_fetch)
+    monkeypatch.setattr(book_depth, "fetch_books_for_event", fake_books)
+    monkeypatch.setattr(monitor.book_depth, "fetch_books_for_event", fake_books)
+
+    asyncio.run(
+        monitor.run_monitor(
+            str(tmp_db_path),
+            duration_minutes=0.001,
+            poll_interval_seconds=0.001,
+            capture_books_for_flagged=True,
+            book_capture_fee_buffer=0.01,
+        )
+    )
+    conn = db_module.connect(tmp_db_path)
+    rows = conn.execute(
+        "SELECT token_id, event_id, half_spread FROM book_snapshots"
+    ).fetchall()
+    conn.close()
+    # Only the flagged event's two markets should have produced book rows;
+    # the fair event has best_gap = 0 which doesn't clear the buffer. The
+    # loop may run multiple times in the short test window — assert
+    # cardinality of distinct (event, market) pairs rather than total rows.
+    event_ids = {r["event_id"] for r in rows}
+    assert event_ids == {"E-FLAG"}
+    tokens = {r["token_id"] for r in rows}
+    assert len(tokens) == 2  # m1 and m2 of the flagged event
+    for r in rows:
+        assert abs(r["half_spread"] - 0.005) < 1e-9
+
+
+def test_run_monitor_book_fetch_failure_does_not_kill_loop(
+    tmp_db_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network failure on the /book fetch must not stop the monitor loop —
+    the trajectory still gets written, the book just isn't captured."""
+    from polymarket_edge import book_depth
+    from polymarket_edge import db as db_module
+
+    flagged = make_event(
+        "E1",
+        markets=[
+            make_market("m1", best_bid=0.60, best_ask=0.61),
+            make_market("m2", best_bid=0.55, best_ask=0.56),
+        ],
+    )
+
+    async def fake_fetch(**kwargs):
+        return [flagged]
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(monitor.fetch, "fetch_all_active_events", fake_fetch)
+    monkeypatch.setattr(book_depth, "fetch_books_for_event", boom)
+    monkeypatch.setattr(monitor.book_depth, "fetch_books_for_event", boom)
+
+    _, _, n_written = asyncio.run(
+        monitor.run_monitor(
+            str(tmp_db_path),
+            duration_minutes=0.001,
+            poll_interval_seconds=0.001,
+            capture_books_for_flagged=True,
+            book_capture_fee_buffer=0.0,
+        )
+    )
+    conn = db_module.connect(tmp_db_path)
+    n_traj = conn.execute("SELECT COUNT(*) FROM signal_trajectories").fetchone()[0]
+    n_books = conn.execute("SELECT COUNT(*) FROM book_snapshots").fetchone()[0]
+    conn.close()
+    assert n_traj >= 1
+    assert n_books == 0
+    assert n_written >= 1

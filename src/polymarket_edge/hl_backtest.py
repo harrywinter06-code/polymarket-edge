@@ -86,12 +86,35 @@ def _series_by_coin(ticks: Sequence[FundingTick]) -> dict[str, list[FundingTick]
 
 
 def _common_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
-    """Build the union of timestamps that appear in every coin's series."""
+    """Intersection of timestamps across all coins.
+
+    DEPRECATED for ranking strategies: this induces survivorship bias because
+    a coin that wasn't listed for part of the window erases that part of the
+    grid for *every* coin. Retained for the passive-short baseline, which is
+    naturally single-coin and unaffected.
+    """
     if not per_coin:
         return []
     sets = [{t.t_ms for t in series} for series in per_coin.values()]
     common = set.intersection(*sets) if sets else set()
     return sorted(common)
+
+
+def _union_grid(per_coin: dict[str, list[FundingTick]]) -> list[int]:
+    """Union of timestamps across all coins.
+
+    Used by ranking strategies (top-K trailing, perfect-hindsight) so that
+    coins listed mid-window contribute to the buckets where they have data
+    and don't drop the buckets where they don't. Per-bucket eligibility is
+    enforced inside the strategy loop via the full-trailing / full-future
+    window checks.
+    """
+    if not per_coin:
+        return []
+    out: set[int] = set()
+    for series in per_coin.values():
+        out.update(t.t_ms for t in series)
+    return sorted(out)
 
 
 def _maps(per_coin: dict[str, list[FundingTick]]) -> dict[str, dict[int, float]]:
@@ -164,9 +187,15 @@ def backtest_top_k_trailing(
     """Trailing-mean predictor: rank by trailing N-hour mean, short the top K
     for the next rebalance_hours interval, realize the actual funding sum.
     Returns are SHORT-side, so positive funding (paid by longs) is profit.
+
+    Grid is the union of per-coin timestamps; a coin is only eligible at
+    rebalance bucket t if it has a complete trailing window ending at t AND a
+    complete future window of length rebalance_hours. This avoids the
+    survivorship bias of an intersection grid, which would silently exclude
+    every bucket where any tracked coin lacked data.
     """
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     if len(grid) < trailing_hours + rebalance_hours:
         return _summary(
             strategy=f"top{top_k}_trail{trailing_hours}h_rebal{rebalance_hours}h",
@@ -218,9 +247,11 @@ def backtest_perfect_hindsight(
     rebalance_hours: int = 8,
 ) -> BacktestResult:
     """Cheating baseline — at each interval, short the coin that actually had
-    the highest funding over that interval. Upper bound for K=1."""
+    the highest funding over that interval. Upper bound for K=1. Uses the
+    union grid; a coin is eligible only when it has a complete future window
+    over the interval (same survivorship-aware rule as the trailing version)."""
     per_coin = _series_by_coin(ticks)
-    grid = _common_grid(per_coin)
+    grid = _union_grid(per_coin)
     maps = _maps(per_coin)
     returns: list[float] = []
     coins_held: set[str] = set()

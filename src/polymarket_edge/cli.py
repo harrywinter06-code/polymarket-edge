@@ -15,6 +15,7 @@ from polymarket_edge import (
     detector,
     fetch,
     hl_backtest,
+    hl_hedge,
     hl_stats,
     hl_stats_block,
     hl_tail,
@@ -22,6 +23,7 @@ from polymarket_edge import (
     microstructure,
     monitor,
     paper,
+    plots,
     report,
     trap_classifier,
     walkforward,
@@ -79,6 +81,9 @@ def scan(
         if sig is None:
             continue
         scored += 1
+        # Signals FK to events; upsert before insert so `scan` works without
+        # requiring a prior `ingest` run.
+        db.upsert_event(conn, ev, detected_at)
         db.insert_arb_signal(
             conn,
             event_id=sig.event_id,
@@ -147,6 +152,18 @@ def monitor_cmd(
         help="Cap per poll. Larger caps require a host with enough virtual "
         "memory; the gamma /events embedded-markets payload is heavy.",
     ),
+    capture_books: bool = typer.Option(
+        False,
+        help="Also fetch /book for every flagged event and persist to "
+        "book_snapshots. Slower (one extra HTTP per active market per "
+        "flagged event) but produces the inside-spread time series the MM "
+        "simulator needs as an honest replacement for the 5-min-delta proxy.",
+    ),
+    book_capture_fee_buffer: float = typer.Option(
+        0.005,
+        help="Only capture books for events whose detector best_gap clears "
+        "this threshold (saves a lot of HTTP on noise events).",
+    ),
 ) -> None:
     """Poll active events at a fixed cadence, recording signal trajectories.
 
@@ -159,6 +176,8 @@ def monitor_cmd(
             duration_minutes=duration_minutes,
             poll_interval_seconds=poll_interval,
             max_events_per_poll=cap,
+            capture_books_for_flagged=capture_books,
+            book_capture_fee_buffer=book_capture_fee_buffer,
         )
     )
     typer.echo(
@@ -221,7 +240,11 @@ def runs(db_path: Path = DEFAULT_DB) -> None:
 
 @app.command("hl-ingest")
 def hl_ingest_cmd(db_path: Path = DEFAULT_DB) -> None:
-    """Snapshot the current Hyperliquid universe + funding for every perp."""
+    """Snapshot the current Hyperliquid universe + funding for every perp.
+
+    Also writes a time-keyed `hl_universe_snapshots` row per coin so a
+    survivorship-corrected backtest can ask "which coins existed at time t?"
+    """
     universe, ctxs = asyncio.run(hyperliquid.fetch_meta_and_ctxs())
     conn = db.connect(db_path)
     db.init_schema(conn)
@@ -230,7 +253,23 @@ def hl_ingest_cmd(db_path: Path = DEFAULT_DB) -> None:
     n = 0
     for u, ctx in zip(universe, ctxs, strict=True):
         coin = u.get("name")
-        if not coin or "funding" not in ctx:
+        if not coin:
+            continue
+        # Time-keyed snapshot for survivorship analysis.
+        oi = ctx.get("openInterest") if isinstance(ctx, dict) else None
+        try:
+            oi_f = float(oi) if oi is not None else None
+        except (TypeError, ValueError):
+            oi_f = None
+        db.insert_hl_universe_snapshot(
+            conn,
+            coin=coin,
+            sz_decimals=u.get("szDecimals"),
+            max_leverage=u.get("maxLeverage"),
+            open_interest=oi_f,
+            snapshot_at=fetched_at,
+        )
+        if "funding" not in ctx:
             continue
         hyperliquid.insert_funding_snapshot(conn, coin=coin, ctx=ctx, snapshot_at=fetched_at)
         n += 1
@@ -574,6 +613,68 @@ def microstructure_scan_cmd(
         )
 
 
+@app.command("hl-cadence-frontier")
+def hl_cadence_frontier_cmd(
+    db_path: Path = DEFAULT_DB,
+    top_k: int = typer.Option(5),
+    trailing_hours: int = typer.Option(24),
+    cadences: str = typer.Option(
+        "8,24,72,168,336,720",
+        help="Comma-separated rebalance cadences in hours",
+    ),
+    spread_bps_per_leg: float = typer.Option(5.0),
+    out: Path | None = typer.Option(  # noqa: B008
+        None, help="Optional PNG path for the frontier chart"
+    ),
+) -> None:
+    """Sweep rebalance cadences and report the gross/net carry frontier.
+
+    The headline finding is the break-even cadence — the rebalance period
+    at which net annualised return crosses zero for the configured per-leg
+    spread. Above that cadence the strategy is net-positive on carry alone.
+    """
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    ticks = hl_backtest.load_funding(conn)
+    if not ticks:
+        typer.echo("no funding history; run `hl-history` first")
+        raise typer.Exit(1)
+    cadence_list = [int(c.strip()) for c in cadences.split(",") if c.strip()]
+    rows = hl_hedge.cadence_frontier(
+        ticks,
+        cadences_hours=cadence_list,
+        top_k=top_k,
+        trailing_hours=trailing_hours,
+        spread_bps_per_leg=spread_bps_per_leg,
+    )
+    typer.echo(
+        f"{'cadence':>8} {'n_reb':>6} {'gross_ann':>10} {'net_ann':>10} "
+        f"{'net_sharpe':>11} {'breakeven_bps':>14}"
+    )
+    breakeven_cadence: int | None = None
+    for r in rows:
+        if r.net_annualized >= 0 and breakeven_cadence is None and r.n_rebalances > 0:
+            breakeven_cadence = r.rebalance_hours
+        typer.echo(
+            f"{r.rebalance_hours:>7}h {r.n_rebalances:>6} "
+            f"{r.gross_annualized:>+10.4f} {r.net_annualized:>+10.4f} "
+            f"{r.net_sharpe:>+11.2f} {r.breakeven_bps_per_leg:>13.2f}"
+        )
+    if breakeven_cadence is not None:
+        typer.echo(
+            f"\nBreak-even cadence at {spread_bps_per_leg}bp/leg: "
+            f">= {breakeven_cadence}h"
+        )
+    else:
+        typer.echo(
+            f"\nNo positive-net cadence found at {spread_bps_per_leg}bp/leg "
+            f"across the tested set."
+        )
+    if out is not None:
+        plots.plot_cadence_frontier(rows, out, spread_bps_per_leg=spread_bps_per_leg)
+        typer.echo(f"wrote chart to {out}")
+
+
 @app.command("hl-tail")
 def hl_tail_cmd(
     db_path: Path = DEFAULT_DB,
@@ -618,8 +719,17 @@ def hl_tail_cmd(
 def trap_predict_cmd(
     db_path: Path = DEFAULT_DB,
     scan_id: str = typer.Option("", help="Specific scan_id; blank = latest"),
+    n_shuffle_controls: int = typer.Option(
+        20, help="Number of label-shuffled LOOCV runs for the negative-control AUC."
+    ),
 ) -> None:
-    """Train the trap classifier on the latest microstructure scan and report LOOCV AUC."""
+    """Train the trap classifier on the latest microstructure scan and report LOOCV AUC.
+
+    Also runs ``n_shuffle_controls`` label-shuffled LOOCV runs and reports the
+    mean shuffled AUC. The real AUC must clear the shuffled mean by a margin
+    that's meaningful given the sample size; on small N the gap is the actual
+    signal, not the raw AUC.
+    """
     conn = db.connect(db_path)
     db.init_schema(conn)
     rows = trap_classifier.load_classifications_from_db(
@@ -642,6 +752,19 @@ def trap_predict_cmd(
         f"confusion: TP={res.confusion['tp']} FP={res.confusion['fp']} "
         f"TN={res.confusion['tn']} FN={res.confusion['fn']}"
     )
+    if n_shuffle_controls > 0:
+        shuffled = [
+            trap_classifier.leave_one_out_cv(
+                features, labels, shuffle_labels=True, shuffle_seed=s
+            ).auc
+            for s in range(n_shuffle_controls)
+        ]
+        mean_shuf = sum(shuffled) / len(shuffled)
+        n_beat = sum(1 for a in shuffled if res.auc > a)
+        typer.echo(
+            f"negative-control: mean shuffled AUC={mean_shuf:.3f} "
+            f"(n={n_shuffle_controls}); real AUC beats {n_beat}/{n_shuffle_controls} shuffles"
+        )
     typer.echo("feature coefficients (descending |coef|):")
     for name, coef in res.feature_importance_ordered:
         typer.echo(f"  {name:24}  {coef:+.4f}")
