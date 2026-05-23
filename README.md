@@ -114,7 +114,7 @@ Mechanical explanation: a 2-market state race (e.g. governor's seat: Democrat vs
 
 **Practical takeaway for any prediction-market quant:** the depth-walking pass is non-optional before sizing, AND naive count-based statistics massively overstate the trap risk to dollars-at-risk. A maker-only sizing pipeline anchored on the World Cup-style high-volume events captures most of the dollar opportunity while almost entirely avoiding the trap-prone long tail of small state-race events.
 
-**Trap classifier (n=18, scaffolding):** trained a logistic regression on `(category tag, n_markets, top-of-book gap, is_US_politics, neg_risk_augmented)` with leave-one-out CV: **AUC = 0.600**, accuracy at p=0.5 = 77.8% vs base rate 55.6%. Top features `is_us_politics` (+2.29) and `neg_risk_augmented` (+1.50). The model is honest scaffolding at n=18; once daily scans accumulate to n>100 the same script retrains and the AUC becomes load-bearing. Run via `polymarket-edge trap-predict`.
+**Trap classifier (n=30 pooled across 5 scans, scaffolding):** trained a logistic regression on `(n_markets, top-of-book gap, is_US_politics, is_two_market, neg_risk_augmented)` with leave-one-out CV: **AUC = 0.587**, accuracy at p=0.5 = 76.7% vs base rate 70.0%. Top features `is_two_market` (−3.04) and `is_us_politics` (+2.68) — the same 2-market US-politics trap pattern the count-based table identifies, recovered by the model independently. Negative-control AUC on 20 label-shuffled LOOCV runs has mean **0.332**; the real model beats **18 of 20** shuffles. The real-vs-shuffled gap (~0.26) is the signal magnitude, not the raw AUC — at small N the LOOCV AUC estimator itself has wide error bars. Once the daily cron grows the pool past n=100 the AUC number becomes load-bearing on its own. Run via `polymarket-edge trap-predict --pool-scans`.
 
 Full method + caveats + the binary-classification jitter discussion + the volume-weighted reframing + the classifier section in [MICROSTRUCTURE.md](MICROSTRUCTURE.md).
 
@@ -150,51 +150,43 @@ Gross decomposition of the +11.5% top-5: ~7.7% comes from the base-rate funding 
 | Moving-block | [+10.05%, +13.19%] | [+30.77, +45.94] |
 | **Stationary bootstrap** | **[+9.78%, +13.59%]** | [+30.71, +46.96] |
 
-Funding returns are autocorrelated (ACF(1) = +0.574) — IID resampling under-states the variance. Block bootstrap widens the annualized-return CI by **~28%** and the Sharpe CI by ~12%. The honest defensible band is **[+14.1%, +25.2%]**, not the IID [+14.9%, +23.7%]. Run via `polymarket-edge hl-ci-block`.
+Funding returns are autocorrelated (block bootstrap widens the IID CI by ~30% on the annualised return). The honest defensible band is the stationary bootstrap **[+9.78%, +13.59%]**, not the IID [+10.88%, +12.16%]. Run via `polymarket-edge hl-ci-block`.
 
-**Regime-conditional + basis-hedged result** (the answer to "what's the realistic Sharpe once you actually model the hedge?"): of 37 universe coins, only 9 have liquid spot listings on Hyperliquid for full hedging. On those 9, over 59 rebalances, the headline hedged result is **−106% annualized** — basis decoupled badly during the build window. BUT regime-conditioning by trailing-7d BTC realized vol surfaces a positive cell: **in the low-vol tercile (N=11), the basis-hedged strategy returns +72.5% annualized at 5 bps/leg spread, Sharpe +1.91, 95% CI [−44, +20]**. The CI is wide because N=11 — this is directional evidence, not statistical proof. Implementation: `hl_basis_hedge.py`. CLI: `polymarket-edge basis-regime`.
+**Adjacent research modules (small-N, exploratory, not in the year-scale headline).** Two additional studies live in the codebase as pilot work:
 
-**Funding extremes — the contrarian directional finding.** Tested whether perp prices at extreme funding events (z>±2 vs trailing 168h) rally or crash over the next 24h, across 18 (threshold × direction × horizon) configurations with Bonferroni correction. Standard "high-funding-shorts-win" intuition does NOT hold at the >2σ positive tail (t = −0.13, null). **The signal is on the NEGATIVE side: long the perp at z<−2 negative-funding extremes returns +1.18% over 24h, +4.48% over 72h, with t-stats +3.27 to +7.09 clearing Bonferroni in 7 of 18 cells**. With strict event-independence cooldown (≥72h), zero cells clear — the headline depends on clustered events on the same coin. DOGE in isolation: t=+3.81. Implementation: `hl_extremes.py`. CLI: `polymarket-edge extremes`.
+- **`hl_basis_hedge.py`** — basis-aware variant: of the universe, only the coins with liquid HL spot can be fully hedged. On that subset (n=9 coins, 59 rebalances) the basis decoupled badly during the original build window. Regime-conditioning by trailing-7d BTC realised vol surfaced a positive low-vol cell. Small-N, directional only — see [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md) for the year-scale walk-back.
+- **`hl_extremes.py`** — funding-extreme directional study. Long-the-perp at z < −2 negative-funding extremes showed t-stats +3.3 to +7.1 over 24-72h horizons across multiple configurations, but the signal disappears under a ≥72h event-independence cooldown — clustered events on the same coin drove the headline. Small-N pilot, not a headline finding.
 
-**Tail risk** on the headline strategy (`polymarket-edge hl-tail`):
+**Tail risk** on the headline strategy, year-scale (n=1,093 8h periods, `polymarket-edge hl-tail`):
 
-| metric | GROSS | NET (5bp/leg) |
+| metric | GROSS | NET (5 bp/leg) |
 |---|---|---|
-| annualized return | +19.03% | −199.97% |
-| VaR_95 (per period) | +0.0038% | −0.196% |
-| Expected Shortfall_95 | −0.0016% | −0.202% |
-| max drawdown | 0.0068% | 10.23% |
-| max-drawdown duration | 1 period | 56 periods (entire sample) |
-| recovery from max DD | 1 period | never |
-| periods in drawdown | 1 of 56 | 56 of 56 |
+| annualized return | +11.51% | **−207.49%** |
+| VaR_95 (per period) | +0.0022 bp | −19.78 bp |
+| Expected Shortfall_95 | −0.17 bp | −20.17 bp |
+| max drawdown | 0.0386% | 207.11% |
+| max-drawdown duration | 15 periods | 1,093 periods (entire sample) |
+| recovery from max DD | 7 periods | never |
+| periods in drawdown | 48 of 1,093 | 1,093 of 1,093 |
 
-The GROSS tail is essentially trivial — funding is so consistently positive on the trailing-K-selected coins that the worst 5% of periods is still essentially breakeven. The NET tail is the inverse: every period is a loss, drawdown is monotonic. Tail asymmetry between GROSS and NET (~125× larger tail loss) is the single most damning statistic against the headline 8h cadence — it's not just "the mean is bad," every percentile is bad. Implementation: `hl_tail.py`.
+The GROSS tail is essentially trivial — funding is so consistently positive on the trailing-K-selected coins that the 5th-percentile period is still slightly positive. The NET tail is the inverse: every period is a loss, drawdown is monotonic over the entire year. The tail asymmetry between GROSS and NET (~120× larger tail loss) is the single most damning statistic against the headline 8h cadence — it's not just "the mean is bad," every percentile is bad, and the cumulative net result never reaches a new peak after period 1. The cadence-frontier table above is the resolution: at ≥ 2-weekly rebalance the net tail flips positive. Implementation: `hl_tail.py`.
 
-**Walk-forward (out-of-sample) validation, train=10d/test=5d/step=3d:** *the OOS result slightly OUTPERFORMS in-sample.*
+**Walk-forward (out-of-sample) validation, train=60d/test=30d/step=14d on the full year:** 20 sliding windows, **20 of 20 OOS-positive**, with mild conventional decay.
 
-| config | n windows | IS mean ann ret | OOS mean ann ret | decay (IS − OOS) |
-|---|---|---|---|---|
-| train=10, test=5, step=3 | 2 | +14.27% / +20.17% | +16.87% / +29.69% | **−6.06pp** |
-| train=10, test=7, step=2 | 2 | +17.74% / +20.15% | +24.06% / +27.78% | **−6.98pp** |
-| train=7, test=5, step=2 | 4 | +13.28% .. +23.76% | +15.73% .. +29.69% | **−3.42pp** |
+| metric | value |
+|---|---|
+| windows | 20 |
+| IS mean annualised | +11.09% |
+| OOS mean annualised | **+10.06%** |
+| decay (IS − OOS) | **+1.03 pp** — mild, conventional direction |
+| OOS-positive windows | **20 / 20** |
+| OOS Sharpe range | +28.90 to +160.95 |
 
-Negative decay = OOS beats IS. Every coin held in train was still in the universe at test time. The selection signal is **persistent, not over-fit** — a real strength signal. The +19% headline is robust to OOS, but as already documented it does NOT survive realistic spread costs at 8h rebalance cadence (OOS net of 5bp/leg = −195% to −203%, matching the in-sample finding). Run via `polymarket-edge walk-forward`.
+The selection signal is **persistent, not over-fit** — every test segment beats zero, and the IS/OOS decay is in the expected direction at a non-pathological magnitude. The +11.5% gross headline is robust to OOS, but as already documented it does NOT survive realistic spread costs at 8h rebalance cadence (see cadence frontier above). Run via `polymarket-edge walk-forward`.
 
 **Funding-momentum variant** (rank by z-score of recent vs longer-window funding rather than by level) was tested and **lost** to the level-based ranker: +8.0% annualized vs +17.2% on a matched 168h-history budget. Rate-of-change does not beat level here — clean negative result documented in `hl_strategies.py`.
 
-**But every number above is gross of execution cost.** A second pass (`hl_hedge.py`) nets the short-perp + long-spot round-trip spread, charging `4 × spread_bps_per_leg` per rebalance. At a realistic 5 bps/leg (20 bps round-trip):
-
-| rebalance | gross annualized | net annualized | net Sharpe |
-|---|---|---|---|
-| 8h | +19.0% | **−200.0%** | −388.6 |
-| 24h | +16.5% | −56.6% | −70.9 |
-| 72h | +5.0% | −19.4% | −10.3 |
-| 168h (weekly) | +8.0% | −2.4% | −2.7 |
-| 336h (biweekly) | +6.6% | +1.4% | ≈0 |
-
-**Breakeven on the 8h variant is ~0.43 bps per leg** — below any realistic execution cost on Hyperliquid + spot. The carry signal exists, but at the headline 8h cadence it is entirely consumed by execution costs. Only weekly+ rebalance survives, and even then only at sub-5bp/leg spread.
-
-This is the honest answer to the question "what's the Sharpe really?": **depends entirely on cadence, and the headline 8h configuration is not viable after costs**. The find is in [`scripts/spread_sensitivity.py`](scripts/spread_sensitivity.py).
+**The cost-of-execution story is the full table in §Cadence frontier above.** At 5 bps/leg the 8h cadence collapses to net −207%; net annualised crosses zero between 168h (weekly) and 336h (bi-weekly). Per-period breakeven on the 8h variant is **0.26 bps/leg** — far below any realistic execution cost. Implementation: `hl_hedge.py` + `polymarket-edge hl-cadence-frontier`.
 
 ## Limitations (read before trusting any number)
 
@@ -216,7 +208,7 @@ Built a market-maker simulator that walks the historical CLOB trade flow on each
 | moderate (0.5× spread) | $2,060 | $2,039 | $21 | **+$126** |
 | informed (1.0× spread) | $2,060 | $4,078 | −$2,018 | −$12,120 |
 
-**Breakeven half-spread fraction = 0.505.** Net P&L crosses zero right at the moderate-AS assumption — anyone who believes adverse selection on Polymarket sports markets is below the textbook 50% of half-spread (which retail-heavy flow supports) gets a positive projection. **89% of the net P&L comes from 5 favourites** (France, Spain, England, Argentina, Brazil); 41 of 48 markets are individually net-negative. The basket only clears because the deep top-of-table dominates. Implementation: `polymarket_mm_sim.py`. CLI: `polymarket-edge world-cup-mm`. Full writeup: [WORLD_CUP_MM.md](WORLD_CUP_MM.md).
+**Breakeven half-spread fraction = 0.505.** Net P&L crosses zero right at the moderate-AS assumption — anyone who believes adverse selection on Polymarket sports markets is below the textbook 50% of half-spread (which retail-heavy flow supports) gets a positive projection. **89% of the net P&L comes from 5 favourites** (France, Spain, England, Argentina, Brazil); 41 of 48 markets are individually net-negative. The basket only clears because the deep top-of-table dominates. Implementation: `polymarket_mm_sim.py` (importable; see `tests/test_polymarket_mm_sim.py` for the full sensitivity surface). Full writeup: [WORLD_CUP_MM.md](WORLD_CUP_MM.md).
 
 ## Cross-venue null finding (Fed-rate-cuts vs BTC)
 
@@ -284,7 +276,7 @@ $env:PYTHONPATH="src"; python scripts/world_cup_mm_sim.py        # Plan A: World
 $env:PYTHONPATH="src"; python scripts/hl_basis_regime.py         # Plan B: basis-hedge + regime
 $env:PYTHONPATH="src"; python scripts/hl_extremes_study.py       # Plan D: funding extremes
 uv run --script scripts/sign_simulation_trade.py --slug 2026-fifa-world-cup-winner-595 --total-usd 5
-uv run pytest                                  # 146 tests
+uv run pytest --cov                            # 320 tests, ~92% coverage
 PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 ```
 
