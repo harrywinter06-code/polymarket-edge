@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from polymarket_edge import db
+from polymarket_edge import db, paper
+
+from .conftest import make_event, make_market
 
 
 @pytest.fixture
@@ -86,3 +89,142 @@ def test_max_age_close_logic(tmp_conn: sqlite3.Connection) -> None:
     opened_dt = datetime.fromisoformat(row["opened_at"])
     age_hours = (now - opened_dt).total_seconds() / 3600.0
     assert age_hours > 168.0  # would trigger max_age close in real run
+
+
+# ---------------------------------------------------------------------------
+# paper_auto_round — full open/mark/close cycle
+# ---------------------------------------------------------------------------
+
+
+def _wide_sell_event(event_id: str) -> dict:
+    """A negRisk event with sum(best_bid) well above 1.0 — sell-side flagged."""
+    return make_event(
+        event_id,
+        markets=[
+            make_market("m1", best_bid=0.70, best_ask=0.71),
+            make_market("m2", best_bid=0.60, best_ask=0.61),
+        ],
+    )
+
+
+def _fair_event(event_id: str) -> dict:
+    """Sum of bids == 1.0 — no longer flagged, gap collapses to 0."""
+    return make_event(
+        event_id,
+        markets=[
+            make_market("m1", best_bid=0.50, best_ask=0.51),
+            make_market("m2", best_bid=0.50, best_ask=0.51),
+        ],
+    )
+
+
+def test_paper_auto_round_opens_new_flagged_event(
+    tmp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly flagged event with no existing position should be opened."""
+
+    async def fake_fetch_all_active_events(**kwargs):
+        return [_wide_sell_event("E1")]
+
+    monkeypatch.setattr(paper.fetch, "fetch_all_active_events", fake_fetch_all_active_events)
+
+    n_open, n_close, n_marked = asyncio.run(
+        paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.0)
+    )
+    assert n_open == 1
+    assert n_close == 0
+    assert n_marked == 0
+
+    conn = db.connect(tmp_db_path)
+    row = conn.execute("SELECT * FROM paper_positions WHERE event_id='E1'").fetchone()
+    assert row is not None
+    assert row["side"] == "sell_yes"
+    assert row["entry_gap"] > 0
+    assert row["closed_at"] is None
+
+
+def test_paper_auto_round_does_not_double_open(
+    tmp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake(**kwargs):
+        return [_wide_sell_event("E1")]
+
+    monkeypatch.setattr(paper.fetch, "fetch_all_active_events", fake)
+    asyncio.run(paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.0))
+    n_open, _, n_marked = asyncio.run(
+        paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.0)
+    )
+    assert n_open == 0
+    assert n_marked == 1  # second round marks the same open position
+
+
+def test_paper_auto_round_closes_on_decay(
+    tmp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round 1 opens at gap=0.3, round 2 sees gap=0 -> close on decay."""
+    events_iter = iter([[_wide_sell_event("E1")], [_fair_event("E1")]])
+
+    async def fake(**kwargs):
+        return next(events_iter)
+
+    monkeypatch.setattr(paper.fetch, "fetch_all_active_events", fake)
+    asyncio.run(paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.0, close_decay=0.5))
+    _, n_close, _ = asyncio.run(
+        paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.0, close_decay=0.5)
+    )
+    assert n_close == 1
+    conn = db.connect(tmp_db_path)
+    row = conn.execute("SELECT * FROM paper_positions WHERE event_id='E1'").fetchone()
+    assert row["close_reason"] == "decay"
+    # P&L = notional * (|entry_gap| - |current_gap|) = 100 * (0.30 - 0.0) = 30.
+    assert abs(row["realized_pnl_usd"] - 30.0) < 1e-9
+
+
+def test_paper_auto_round_closes_on_max_age(
+    tmp_conn: sqlite3.Connection,
+    tmp_db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-seed an aged open position; auto-round should close on max_age even
+    though the current gap is still wide."""
+    old_ts = (datetime.now(UTC) - timedelta(hours=200)).isoformat()
+    tmp_conn.execute(
+        """INSERT INTO events
+           (id, slug, title, neg_risk, neg_risk_augmented, n_markets, fetched_at)
+           VALUES ('E1', 'ev', 'ev', 1, 0, 2, ?)""",
+        (old_ts,),
+    )
+    tmp_conn.execute(
+        """INSERT INTO paper_positions
+           (venue, event_id, side, notional_usd, entry_gap, opened_at)
+           VALUES ('polymarket', 'E1', 'sell_yes', 100.0, 0.30, ?)""",
+        (old_ts,),
+    )
+    tmp_conn.commit()
+
+    async def fake(**kwargs):
+        return [_wide_sell_event("E1")]  # gap still wide -> would normally not close on decay
+
+    monkeypatch.setattr(paper.fetch, "fetch_all_active_events", fake)
+    _, n_close, _ = asyncio.run(
+        paper.paper_auto_round(
+            str(tmp_db_path), fee_buffer=0.0, close_decay=0.01, max_age_hours=168.0
+        )
+    )
+    assert n_close == 1
+    conn = db.connect(tmp_db_path)
+    row = conn.execute("SELECT * FROM paper_positions WHERE event_id='E1'").fetchone()
+    assert row["close_reason"] == "max_age"
+
+
+def test_paper_auto_round_skips_unflagged_events(
+    tmp_db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake(**kwargs):
+        return [_fair_event("E1")]
+
+    monkeypatch.setattr(paper.fetch, "fetch_all_active_events", fake)
+    n_open, _, _ = asyncio.run(
+        paper.paper_auto_round(str(tmp_db_path), fee_buffer=0.005)
+    )
+    assert n_open == 0

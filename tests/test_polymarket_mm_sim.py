@@ -6,8 +6,13 @@ behavior of the simulator.
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+import httpx
 import pytest
 
+from polymarket_edge import polymarket_mm_sim
 from polymarket_edge.polymarket_mm_sim import (
     INFORMED_SCENARIO,
     MODERATE_SCENARIO,
@@ -16,6 +21,8 @@ from polymarket_edge.polymarket_mm_sim import (
     Trade,
     breakeven_half_spread_fraction,
     estimate_half_spread,
+    fetch_trades_for_event,
+    fetch_trades_for_token,
     simulate_basket,
     simulate_market_maker,
 )
@@ -200,3 +207,138 @@ def test_days_spanned_matches_timestamp_range() -> None:
     trades = _make_trades(2, spacing_s=DAY_S)  # 1 day apart
     result = simulate_market_maker(trades, scenario=NAIVE_SCENARIO)
     assert result.days_observed == pytest.approx(1.0, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Trade-fetcher coverage
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_trades_returns_empty_without_condition_id() -> None:
+    async def runner() -> list[Trade]:
+        async with httpx.AsyncClient() as client:
+            return await fetch_trades_for_token(client, "tok-1")
+
+    assert asyncio.run(runner()) == []
+
+
+def test_fetch_trades_filters_to_token_and_window(mock_http, monkeypatch) -> None:
+    """The data-api filters by conditionId but returns global trades; we must
+    drop anything whose `asset` doesn't match our token, and anything older
+    than `lookback_days`."""
+    monkeypatch.setattr(polymarket_mm_sim, "_now_s", lambda: 1_800_000_000)
+    in_window_ts = 1_800_000_000 - 2 * 86_400
+    out_window_ts = 1_800_000_000 - 100 * 86_400
+    rows = [
+        # YES side, in window: kept
+        {"asset": "tok-yes", "timestamp": in_window_ts, "price": "0.5", "size": "10",
+         "side": "BUY"},
+        # NO side (wrong asset), in window: dropped
+        {"asset": "tok-no", "timestamp": in_window_ts, "price": "0.5", "size": "10",
+         "side": "SELL"},
+        # YES side, outside window: dropped
+        {"asset": "tok-yes", "timestamp": out_window_ts, "price": "0.4", "size": "10",
+         "side": "BUY"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=json.dumps(rows).encode())
+
+    mock_http(handler)
+
+    async def runner() -> list[Trade]:
+        async with httpx.AsyncClient() as client:
+            return await fetch_trades_for_token(
+                client, "tok-yes", lookback_days=30, condition_id="cond-1"
+            )
+
+    trades = asyncio.run(runner())
+    assert len(trades) == 1
+    assert trades[0].timestamp_s == in_window_ts
+    assert trades[0].taker_side == "BUY"
+
+
+def test_fetch_trades_paginates_until_short_page(mock_http, monkeypatch) -> None:
+    monkeypatch.setattr(polymarket_mm_sim, "_now_s", lambda: 1_800_000_000)
+    monkeypatch.setattr(polymarket_mm_sim, "PAGE_SIZE", 3)
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params.get("offset", "0"))
+        call_count["n"] += 1
+        if offset >= 6:
+            return httpx.Response(200, content=b"[]")
+        rows = [
+            {"asset": "tok", "timestamp": 1_800_000_000 - 60,
+             "price": "0.5", "size": "10", "side": "BUY"}
+            for _ in range(3)
+        ]
+        return httpx.Response(200, content=json.dumps(rows).encode())
+
+    mock_http(handler)
+
+    async def runner() -> list[Trade]:
+        async with httpx.AsyncClient() as client:
+            return await fetch_trades_for_token(
+                client, "tok", lookback_days=30, condition_id="cond-1"
+            )
+
+    trades = asyncio.run(runner())
+    # Two full pages of 3 each before the empty terminator.
+    assert len(trades) == 6
+    assert call_count["n"] >= 2
+
+
+def test_fetch_trades_for_event_skips_missing_token_or_condition(
+    mock_http,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"[]")
+
+    mock_http(handler)
+    markets = [
+        {"clobTokenIds": '["yes-1", "no-1"]', "conditionId": "cond-1"},
+        {"clobTokenIds": '["yes-2", "no-2"]'},        # missing conditionId
+        {"conditionId": "cond-3"},                    # missing clobTokenIds
+        {"clobTokenIds": '["yes-4", "no-4"]', "conditionId": "cond-4"},
+    ]
+    result = asyncio.run(fetch_trades_for_event(markets, lookback_days=30))
+    assert set(result.keys()) == {"yes-1", "yes-4"}
+
+
+def test_estimate_half_spread_empty_returns_zero() -> None:
+    assert estimate_half_spread([]) == 0.0
+
+
+def test_simulate_market_maker_capture_zero_returns_zero_pnl() -> None:
+    """sole_maker_capture_fraction=0 -> captured=0 -> early return path."""
+    trades = _make_trades(10, price=0.5, size=10.0)
+    result = simulate_market_maker(
+        trades, scenario=NAIVE_SCENARIO, sole_maker_capture_fraction=0.0
+    )
+    assert result.estimated_maker_fills == 0
+    assert result.net_pnl_usd == 0.0
+    assert result.gross_rebate_usd == 0.0
+    # days_observed still reflects the observed span.
+    assert result.days_observed > 0
+
+
+def test_breakeven_half_spread_fraction_returns_inf_when_no_spread() -> None:
+    """Constant-price trades have zero realized half-spread -> no AS cost ->
+    breakeven is infinite (rebate is always pure profit)."""
+    trades = _make_trades(20, price=0.5)
+    frac = breakeven_half_spread_fraction({"t": trades})
+    assert frac == float("inf")
+
+
+def test_breakeven_half_spread_fraction_ignores_empty_lists() -> None:
+    """An empty trade list for one market should not crash; just skipped."""
+    base_ts = 1_700_000_000
+    prices = [0.50 if i % 2 == 0 else 0.52 for i in range(20)]
+    trades = [
+        Trade(token_id="t", timestamp_s=base_ts + i * 60, price=p, size_shares=10.0,
+              taker_side="BUY")
+        for i, p in enumerate(prices)
+    ]
+    frac = breakeven_half_spread_fraction({"empty": [], "t": trades})
+    assert frac > 0 and frac != float("inf")

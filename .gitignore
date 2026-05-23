@@ -14,6 +14,8 @@ signed_orders/
 .ruff_cache/
 .pytest_cache/
 .ty_cache/
+.coverage
+htmlcov/
 dist/
 build/
 *.egg-info/

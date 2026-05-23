@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+import pytest
+
+from polymarket_edge import microstructure
 from polymarket_edge.book_depth import Level, MarketBook
 from polymarket_edge.microstructure import (
     EventClassification,
     aggregate_by_category,
     classify_event,
+    scan_and_classify,
 )
+
+from .conftest import make_event, make_market
 
 
 def _market(
@@ -235,3 +242,117 @@ def test_aggregate_by_category_counts_correctly() -> None:
         "Sports": {"real": 1, "trap": 1},
         "Politics": {"marginal": 1},
     }
+
+
+# ---------------------------------------------------------------------------
+# scan_and_classify — the orchestrator
+# ---------------------------------------------------------------------------
+
+
+def _real_books_for(event: dict[str, Any]) -> dict[str, MarketBook]:
+    """Generate deep books that keep the gap intact at any tested size."""
+    out: dict[str, MarketBook] = {}
+    for m in event["markets"]:
+        yes = m["clobTokenIds"].strip('[]"').split('"')[0]
+        bid = m.get("bestBid") or 0.5
+        ask = m.get("bestAsk") or 0.5
+        out[yes] = MarketBook(
+            token_id=yes,
+            bids=[Level(bid, 10_000.0)],
+            asks=[Level(ask, 10_000.0)],
+        )
+    return out
+
+
+def test_scan_and_classify_skips_unflagged_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Events not flagged by the detector should be skipped silently."""
+    # A fair event: sum(best_bid) = 1.0, no gap.
+    ev = make_event(
+        "E1",
+        markets=[
+            make_market("m1", best_bid=0.50, best_ask=0.51),
+            make_market("m2", best_bid=0.50, best_ask=0.51),
+        ],
+    )
+
+    async def fake_fetch(**kwargs):
+        return [ev]
+
+    monkeypatch.setattr(microstructure.fetch, "fetch_all_active_events", fake_fetch)
+
+    async def fake_books(markets, **kwargs):
+        raise AssertionError("should not fetch books for unflagged events")
+
+    monkeypatch.setattr(microstructure.book_depth, "fetch_books_for_event", fake_books)
+    results = asyncio.run(scan_and_classify(fee_buffer=0.005))
+    assert results == []
+
+
+def test_scan_and_classify_flags_real_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    ev = make_event(
+        "E1",
+        markets=[
+            make_market("m1", best_bid=0.60, best_ask=0.61),
+            make_market("m2", best_bid=0.50, best_ask=0.51),
+        ],
+        tags=[{"label": "Sports"}],
+    )
+    books = _real_books_for(ev)
+
+    async def fake_fetch(**kwargs):
+        return [ev]
+
+    async def fake_books(markets, **kwargs):
+        return books
+
+    monkeypatch.setattr(microstructure.fetch, "fetch_all_active_events", fake_fetch)
+    monkeypatch.setattr(microstructure.book_depth, "fetch_books_for_event", fake_books)
+    results = asyncio.run(scan_and_classify(fee_buffer=0.005))
+    assert len(results) == 1
+    assert results[0].verdict == "real"
+    assert results[0].direction == "sell_yes"
+    assert results[0].category_tag == "Sports"
+
+
+def test_scan_and_classify_handles_book_fetch_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If fetch_books_for_event raises, that event is skipped, others continue."""
+    ev_bad = make_event(
+        "E-BAD",
+        markets=[
+            make_market("m1", best_bid=0.60, best_ask=0.61),
+            make_market("m2", best_bid=0.50, best_ask=0.51),
+        ],
+    )
+    ev_good = make_event(
+        "E-GOOD",
+        slug="good",
+        markets=[
+            make_market("m3", best_bid=0.60, best_ask=0.61),
+            make_market("m4", best_bid=0.50, best_ask=0.51),
+        ],
+    )
+    good_books = _real_books_for(ev_good)
+
+    async def fake_fetch(**kwargs):
+        return [ev_bad, ev_good]
+
+    async def fake_books(markets, **kwargs):
+        # First call (E-BAD's markets) raises; second call returns good books.
+        ids = {m["id"] for m in markets}
+        if "m1" in ids:
+            raise RuntimeError("boom")
+        return good_books
+
+    monkeypatch.setattr(microstructure.fetch, "fetch_all_active_events", fake_fetch)
+    monkeypatch.setattr(microstructure.book_depth, "fetch_books_for_event", fake_books)
+    results = asyncio.run(scan_and_classify(fee_buffer=0.005))
+    assert [r.event_id for r in results] == ["E-GOOD"]
+
+
+def test_extract_category_falls_back_to_uncategorized() -> None:
+    assert microstructure._extract_category({}) == "Uncategorized"
+    assert microstructure._extract_category({"tags": []}) == "Uncategorized"
+    assert microstructure._extract_category({"tags": "not-a-list"}) == "Uncategorized"
+    assert microstructure._extract_category({"tags": [{"no_label": 1}]}) == "Uncategorized"
+    assert microstructure._extract_category({"tags": [{"label": None}]}) == "Uncategorized"
+    assert microstructure._extract_category({"tags": [{"label": "Politics"}]}) == "Politics"

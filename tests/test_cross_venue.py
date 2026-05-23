@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 import random
+import sqlite3
 
+import httpx
+
+from polymarket_edge import cross_venue
 from polymarket_edge.cross_venue import (
     AlignedRow,
     align_series,
     compute_lead_lag,
+    fetch_hl_mark_history,
+    fetch_pm_price_history,
+    insert_aligned_rows,
+    run_pair,
 )
 
 BUCKET_MS = 12 * 3_600_000  # 12 hours
@@ -138,3 +148,114 @@ def test_compute_lead_lag_returns_zero_for_independent() -> None:
     finite = [v for v in lags.values() if not math.isnan(v)]
     assert finite, "expected at least one finite correlation"
     assert max(abs(v) for v in finite) < 0.35
+
+
+def test_fetch_pm_price_history_filters_by_cutoff(mock_http, monkeypatch) -> None:
+    """Rows older than the lookback cutoff are dropped."""
+    now_s = 1_800_000_000
+    monkeypatch.setattr(cross_venue, "_now_s", lambda: now_s)
+    # 5 days back = 432_000s
+    history = [
+        {"t": now_s - 10 * 86_400, "p": 0.5},  # outside 7-day window
+        {"t": now_s - 1 * 86_400, "p": 0.6},   # inside
+        {"t": now_s - 3600, "p": 0.7},         # inside
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "market" in request.url.params
+        return httpx.Response(200, content=json.dumps({"history": history}).encode())
+
+    mock_http(handler)
+    rows = asyncio.run(fetch_pm_price_history("tok-1", days=7))
+    assert [t for t, _ in rows] == [now_s - 86_400, now_s - 3600]
+
+
+def test_fetch_hl_mark_history_extracts_candle_closes(mock_http, monkeypatch) -> None:
+    now_s = 1_800_000_000
+    monkeypatch.setattr(cross_venue, "_now_s", lambda: now_s)
+    candles = [
+        {"t": now_s * 1000 - 7200_000, "c": "60000.0"},
+        {"t": now_s * 1000 - 3600_000, "c": "60500.0"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["type"] == "candleSnapshot"
+        assert body["req"]["coin"] == "BTC"
+        return httpx.Response(200, content=json.dumps(candles).encode())
+
+    mock_http(handler)
+    rows = asyncio.run(fetch_hl_mark_history("BTC", days=1))
+    assert rows == [(now_s * 1000 - 7200_000, 60000.0), (now_s * 1000 - 3600_000, 60500.0)]
+
+
+def test_fetch_hl_mark_history_returns_empty_on_non_list_payload(mock_http) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"unexpected": "shape"}')
+
+    mock_http(handler)
+    rows = asyncio.run(fetch_hl_mark_history("BTC", days=1))
+    assert rows == []
+
+
+def test_insert_aligned_rows_persists_to_table(tmp_conn: sqlite3.Connection) -> None:
+    rows = [
+        AlignedRow(t_ms=1, pm_price=0.5, hl_mark=100.0, pm_delta=0.0, hl_log_return=0.0),
+        AlignedRow(t_ms=2, pm_price=0.6, hl_mark=110.0, pm_delta=0.1, hl_log_return=0.09531),
+    ]
+    n = insert_aligned_rows(
+        tmp_conn,
+        pm_token_id="tok-1",
+        hl_coin="BTC",
+        rows=rows,
+        fetched_at="2026-01-01T00:00:00+00:00",
+    )
+    assert n == 2
+    persisted = tmp_conn.execute(
+        "SELECT t_ms, pm_price, hl_mark FROM cross_venue_aligned ORDER BY t_ms"
+    ).fetchall()
+    assert [(r[0], r[1], r[2]) for r in persisted] == [(1, 0.5, 100.0), (2, 0.6, 110.0)]
+
+
+def test_insert_aligned_rows_replaces_on_duplicate(tmp_conn: sqlite3.Connection) -> None:
+    """The UNIQUE constraint with INSERT OR REPLACE updates the prior row."""
+    row1 = AlignedRow(t_ms=1, pm_price=0.5, hl_mark=100.0, pm_delta=0.0, hl_log_return=0.0)
+    row2 = AlignedRow(t_ms=1, pm_price=0.55, hl_mark=101.0, pm_delta=0.05, hl_log_return=0.01)
+    insert_aligned_rows(tmp_conn, pm_token_id="t", hl_coin="BTC", rows=[row1], fetched_at="a")
+    insert_aligned_rows(tmp_conn, pm_token_id="t", hl_coin="BTC", rows=[row2], fetched_at="b")
+    persisted = tmp_conn.execute("SELECT pm_price FROM cross_venue_aligned").fetchall()
+    assert len(persisted) == 1
+    assert persisted[0][0] == 0.55
+
+
+def test_run_pair_end_to_end_with_mocks(mock_http, monkeypatch) -> None:
+    """run_pair calls both fetch_* fns, aligns, and computes lead-lag."""
+    now_s = 1_800_000_000
+    monkeypatch.setattr(cross_venue, "_now_s", lambda: now_s)
+    # Construct PM and HL data aligned on a 12h grid for two buckets.
+    bucket_ms = 12 * 3_600_000
+    t0_ms = (now_s * 1000 // bucket_ms) * bucket_ms - 2 * bucket_ms
+    pm_rows = [
+        {"t": t0_ms // 1000 + 60, "p": 0.50},
+        {"t": (t0_ms + bucket_ms) // 1000 + 60, "p": 0.55},
+    ]
+    hl_candles = [
+        {"t": t0_ms + 60_000, "c": "100.0"},
+        {"t": t0_ms + bucket_ms + 60_000, "c": "110.0"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/prices-history":
+            return httpx.Response(200, content=json.dumps({"history": pm_rows}).encode())
+        if request.url.path == "/info":
+            return httpx.Response(200, content=json.dumps(hl_candles).encode())
+        return httpx.Response(404)
+
+    mock_http(handler)
+    rows, lags = asyncio.run(run_pair(pm_token_id="tok-1", hl_coin="BTC", days=3))
+    assert len(rows) == 2
+    assert isinstance(lags, dict)
+    # With only 2 aligned buckets, Pearson is undefined (N<3) and lags are NaN.
+    # We just verify both fetchers ran and align_series produced the buckets.
+    assert rows[1].pm_price == 0.55
+    assert rows[1].hl_mark == 110.0

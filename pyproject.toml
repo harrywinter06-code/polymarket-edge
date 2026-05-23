@@ -23,6 +23,7 @@ packages = ["src/polymarket_edge"]
 dev = [
     "ruff>=0.8",
     "pytest>=8.3",
+    "pytest-cov>=5.0",
 ]
 
 [tool.ruff]
@@ -31,3 +32,16 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "RUF", "SIM"]
+
+[tool.coverage.run]
+source = ["src/polymarket_edge"]
+branch = false
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
