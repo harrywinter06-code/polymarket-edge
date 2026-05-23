@@ -401,6 +401,8 @@ def test_dashboard_command(db_path: Path) -> None:
 def test_microstructure_scan_command(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from polymarket_edge import db as db_module
+
     sample = [
         EventClassification(
             event_id="E1", event_slug="ev1", event_title="Ev1", category_tag="Sports",
@@ -420,6 +422,46 @@ def test_microstructure_scan_command(
     )
     assert result.exit_code == 0, result.output
     assert "flagged=1" in result.output
+    # --persist is on by default, so the row must be in the DB.
+    conn = db_module.connect(db_path)
+    n = conn.execute("SELECT COUNT(*) FROM microstructure_classifications").fetchone()[0]
+    conn.close()
+    assert n == 1
+
+
+def test_microstructure_scan_command_no_persist(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--no-persist runs the scan but doesn't write to the DB."""
+    from polymarket_edge import db as db_module
+
+    sample = [
+        EventClassification(
+            event_id="E1", event_slug="ev1", event_title="Ev1", category_tag="Sports",
+            n_markets=3, neg_risk_augmented=False, top_of_book_gap=0.05,
+            direction="sell_yes", gap_at_small_size=0.04, gap_at_med_size=0.03,
+            throttle_notional_usd=200.0, verdict="real",
+        ),
+    ]
+
+    async def fake_scan(**kwargs):
+        return sample
+
+    monkeypatch.setattr(cli.microstructure, "scan_and_classify", fake_scan)
+    result = runner.invoke(
+        cli.app,
+        ["microstructure-scan", "--db-path", str(db_path), "--no-persist"],
+    )
+    assert result.exit_code == 0, result.output
+    # The DB never gets the schema either, so opening it gives 0.
+    if db_path.exists():
+        conn = db_module.connect(db_path)
+        db_module.init_schema(conn)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM microstructure_classifications"
+        ).fetchone()[0]
+        conn.close()
+        assert n == 0
 
 
 def test_microstructure_scan_command_no_results(

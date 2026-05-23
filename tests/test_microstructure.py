@@ -356,3 +356,56 @@ def test_extract_category_falls_back_to_uncategorized() -> None:
     assert microstructure._extract_category({"tags": [{"no_label": 1}]}) == "Uncategorized"
     assert microstructure._extract_category({"tags": [{"label": None}]}) == "Uncategorized"
     assert microstructure._extract_category({"tags": [{"label": "Politics"}]}) == "Politics"
+
+
+def test_persist_classifications_writes_rows_with_auto_scan_id(tmp_conn) -> None:
+    cls = [
+        EventClassification(
+            event_id="E1", event_slug="ev1", event_title="Ev1", category_tag="Sports",
+            n_markets=3, neg_risk_augmented=False, top_of_book_gap=0.05,
+            direction="sell_yes", gap_at_small_size=0.04, gap_at_med_size=0.03,
+            throttle_notional_usd=200.0, verdict="real",
+        ),
+        EventClassification(
+            event_id="E2", event_slug="ev2", event_title="Ev2", category_tag="Politics",
+            n_markets=2, neg_risk_augmented=False, top_of_book_gap=0.04,
+            direction="sell_yes", gap_at_small_size=-0.05, gap_at_med_size=-0.10,
+            throttle_notional_usd=5.0, verdict="trap",
+        ),
+    ]
+    scan_id = microstructure.persist_classifications(tmp_conn, cls)
+    assert isinstance(scan_id, str) and len(scan_id) > 0
+    rows = tmp_conn.execute(
+        "SELECT event_id, verdict, scan_id FROM microstructure_classifications "
+        "ORDER BY event_id"
+    ).fetchall()
+    assert [(r["event_id"], r["verdict"], r["scan_id"]) for r in rows] == [
+        ("E1", "real", scan_id),
+        ("E2", "trap", scan_id),
+    ]
+
+
+def test_persist_classifications_honours_explicit_scan_id(tmp_conn) -> None:
+    cls = [
+        EventClassification(
+            event_id="E1", event_slug="ev1", event_title="Ev1", category_tag="Sports",
+            n_markets=3, neg_risk_augmented=False, top_of_book_gap=0.05,
+            direction="sell_yes", gap_at_small_size=0.04, gap_at_med_size=0.03,
+            throttle_notional_usd=200.0, verdict="real",
+        ),
+    ]
+    sid = microstructure.persist_classifications(tmp_conn, cls, scan_id="my-scan")
+    assert sid == "my-scan"
+    row = tmp_conn.execute(
+        "SELECT scan_id FROM microstructure_classifications"
+    ).fetchone()
+    assert row["scan_id"] == "my-scan"
+
+
+def test_persist_classifications_empty_list_no_rows(tmp_conn) -> None:
+    sid = microstructure.persist_classifications(tmp_conn, [])
+    assert isinstance(sid, str)
+    n = tmp_conn.execute(
+        "SELECT COUNT(*) FROM microstructure_classifications"
+    ).fetchone()[0]
+    assert n == 0

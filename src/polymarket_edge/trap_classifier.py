@@ -357,15 +357,48 @@ def load_classifications_from_db(
     conn: sqlite3.Connection,
     *,
     scan_id: str | None = None,
+    pool_scans: bool = False,
 ) -> list[dict[str, Any]]:
     """Return rows from microstructure_classifications, excluding verdict='noise'.
 
-    If scan_id is None, pick the most recent scan_id by max(classified_at) and
-    return only that scan's rows. Otherwise filter to the given scan_id.
+    Mode selection (mutually exclusive):
+      - ``pool_scans=True``: aggregate across every scan_id, deduping by
+        event_id with the latest classification (by ``classified_at`` then
+        ``id``) winning. This is the right loader once the daily cron has
+        accumulated many scans — features per event are mostly static, so
+        seeing the same event twice gives the same row; pooling expands N
+        by counting each unique event once.
+      - ``scan_id=<str>``: filter to exactly that scan.
+      - default (both unset): pick the most recent scan by max(classified_at)
+        and return only that scan's rows.
     """
+    if pool_scans and scan_id is not None:
+        raise ValueError("pass either pool_scans=True or scan_id, not both")
+
     prev_factory = conn.row_factory
     try:
         conn.row_factory = sqlite3.Row
+        if pool_scans:
+            # For each event_id, take the row from the latest scan
+            # (classified_at DESC, id DESC as tiebreaker).
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM microstructure_classifications c
+                WHERE verdict != 'noise'
+                  AND id = (
+                    SELECT c2.id
+                    FROM microstructure_classifications c2
+                    WHERE c2.event_id = c.event_id
+                      AND c2.verdict != 'noise'
+                    ORDER BY c2.classified_at DESC, c2.id DESC
+                    LIMIT 1
+                  )
+                ORDER BY id
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+
         if scan_id is None:
             row = conn.execute(
                 """

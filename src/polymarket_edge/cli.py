@@ -582,6 +582,12 @@ def microstructure_scan_cmd(
     small_size_usd: float = typer.Option(50.0),
     med_size_usd: float = typer.Option(500.0),
     fee_buffer: float = typer.Option(0.005),
+    persist: bool = typer.Option(
+        True,
+        "--persist/--no-persist",
+        help="Persist classifications to microstructure_classifications. "
+        "On by default so trap-predict and the dashboard see fresh rows.",
+    ),
 ) -> None:
     """Scan all currently-active negRisk events and classify each as
     real / marginal / trap by depth-aware basket P&L."""
@@ -593,6 +599,11 @@ def microstructure_scan_cmd(
             fee_buffer=fee_buffer,
         )
     )
+    if persist and classifications:
+        conn = db.connect(db_path)
+        db.init_schema(conn)
+        scan_id = microstructure.persist_classifications(conn, classifications)
+        typer.echo(f"persisted {len(classifications)} rows (scan_id={scan_id})")
     by_cat = microstructure.aggregate_by_category(classifications)
     n = len(classifications)
     if n == 0:
@@ -719,21 +730,34 @@ def hl_tail_cmd(
 def trap_predict_cmd(
     db_path: Path = DEFAULT_DB,
     scan_id: str = typer.Option("", help="Specific scan_id; blank = latest"),
+    pool_scans: bool = typer.Option(
+        False,
+        "--pool-scans/--no-pool-scans",
+        help="Pool across every scan, deduping by event_id (latest verdict "
+        "wins). Use once the daily cron has accumulated enough scans that "
+        "the latest one alone is too small. Mutually exclusive with --scan-id.",
+    ),
     n_shuffle_controls: int = typer.Option(
         20, help="Number of label-shuffled LOOCV runs for the negative-control AUC."
     ),
 ) -> None:
-    """Train the trap classifier on the latest microstructure scan and report LOOCV AUC.
+    """Train the trap classifier and report LOOCV AUC vs label-shuffled control.
+
+    Default: train on the latest scan only. Pass ``--pool-scans`` to train on
+    the deduped union of every scan ever recorded.
 
     Also runs ``n_shuffle_controls`` label-shuffled LOOCV runs and reports the
     mean shuffled AUC. The real AUC must clear the shuffled mean by a margin
     that's meaningful given the sample size; on small N the gap is the actual
     signal, not the raw AUC.
     """
+    if pool_scans and scan_id:
+        typer.echo("error: --pool-scans and --scan-id are mutually exclusive")
+        raise typer.Exit(2)
     conn = db.connect(db_path)
     db.init_schema(conn)
     rows = trap_classifier.load_classifications_from_db(
-        conn, scan_id=scan_id or None
+        conn, scan_id=scan_id or None, pool_scans=pool_scans
     )
     if not rows:
         typer.echo("no microstructure_classifications rows; run `microstructure-scan` first")

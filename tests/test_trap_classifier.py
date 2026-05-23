@@ -7,6 +7,8 @@ import random
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from polymarket_edge import db
 from polymarket_edge.trap_classifier import (
     FEATURE_ORDER,
@@ -240,6 +242,95 @@ def test_load_classifications_picks_latest_scan(tmp_path: Path) -> None:
 
     loaded = load_classifications_from_db(conn)
     assert {r["event_id"] for r in loaded} == {"new-ev"}
+
+
+def _insert_classification(
+    conn,
+    *,
+    scan_id: str,
+    event_id: str,
+    verdict: str,
+    classified_at: str,
+    n_markets: int = 2,
+    category_tag: str = "Politics",
+    top_of_book_gap: float = 0.01,
+    gap_at_small_size: float = -0.05,
+    gap_at_med_size: float = -0.07,
+    throttle: float = 50.0,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO microstructure_classifications
+        (scan_id, event_id, event_slug, event_title, category_tag, n_markets,
+         neg_risk_augmented, direction, top_of_book_gap, gap_at_small_size,
+         gap_at_med_size, throttle_notional_usd, verdict, classified_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, 'sell_yes', ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            scan_id, event_id, f"{event_id}-slug", f"Title {event_id}",
+            category_tag, n_markets,
+            top_of_book_gap, gap_at_small_size, gap_at_med_size,
+            throttle, verdict, classified_at,
+        ),
+    )
+
+
+def test_pool_scans_unions_distinct_events_across_scans(tmp_path: Path) -> None:
+    """The whole point of --pool-scans: events flagged in different scans
+    each contribute one row, not lost to the latest-scan-only default."""
+    db_path = tmp_path / "test.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    _insert_classification(conn, scan_id="scan-a", event_id="ev-a", verdict="real",
+                            classified_at="2026-05-21T01:00:00Z")
+    _insert_classification(conn, scan_id="scan-b", event_id="ev-b", verdict="trap",
+                            classified_at="2026-05-21T02:00:00Z")
+    _insert_classification(conn, scan_id="scan-c", event_id="ev-c", verdict="marginal",
+                            classified_at="2026-05-21T03:00:00Z")
+    conn.commit()
+
+    # Default loader: just the latest scan -> 1 event.
+    assert {r["event_id"] for r in load_classifications_from_db(conn)} == {"ev-c"}
+    # Pooled loader: all three events.
+    pooled = load_classifications_from_db(conn, pool_scans=True)
+    assert {r["event_id"] for r in pooled} == {"ev-a", "ev-b", "ev-c"}
+
+
+def test_pool_scans_dedupes_by_event_id_taking_latest(tmp_path: Path) -> None:
+    """An event seen in multiple scans appears once, with the latest verdict."""
+    db_path = tmp_path / "test.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    _insert_classification(conn, scan_id="scan-old", event_id="ev-1", verdict="marginal",
+                            classified_at="2026-05-21T01:00:00Z")
+    _insert_classification(conn, scan_id="scan-new", event_id="ev-1", verdict="trap",
+                            classified_at="2026-05-21T05:00:00Z")
+    conn.commit()
+    pooled = load_classifications_from_db(conn, pool_scans=True)
+    assert len(pooled) == 1
+    assert pooled[0]["event_id"] == "ev-1"
+    assert pooled[0]["verdict"] == "trap"  # latest wins
+
+
+def test_pool_scans_excludes_noise(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    _insert_classification(conn, scan_id="s1", event_id="ev-noise", verdict="noise",
+                            classified_at="2026-05-21T01:00:00Z")
+    _insert_classification(conn, scan_id="s1", event_id="ev-real", verdict="real",
+                            classified_at="2026-05-21T01:00:00Z")
+    conn.commit()
+    pooled = load_classifications_from_db(conn, pool_scans=True)
+    assert {r["event_id"] for r in pooled} == {"ev-real"}
+
+
+def test_pool_scans_and_scan_id_are_mutually_exclusive(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    conn = db.connect(db_path)
+    db.init_schema(conn)
+    with pytest.raises(ValueError):
+        load_classifications_from_db(conn, scan_id="abc", pool_scans=True)
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,9 @@ ask side. The two directions are NEVER mixed within a single classification
 
 from __future__ import annotations
 
+import sqlite3
 import sys
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -239,3 +241,47 @@ def aggregate_by_category(
         out[c.category_tag][c.verdict] += 1
     # Normalise to plain dicts so callers don't get defaultdict surprises.
     return {cat: dict(verdicts) for cat, verdicts in out.items()}
+
+
+def persist_classifications(
+    conn: sqlite3.Connection,
+    classifications: list[EventClassification],
+    *,
+    scan_id: str | None = None,
+) -> str:
+    """Insert each classification into `microstructure_classifications`.
+
+    Returns the scan_id used (auto-generated if not provided). Caller is
+    responsible for `db.init_schema(conn)` if the schema may not exist.
+    """
+    scan_id = scan_id or uuid.uuid4().hex[:12]
+    classified_at = fetch.now_iso()
+    for c in classifications:
+        conn.execute(
+            """
+            INSERT INTO microstructure_classifications
+            (scan_id, event_id, event_slug, event_title, category_tag,
+             n_markets, neg_risk_augmented, direction, top_of_book_gap,
+             gap_at_small_size, gap_at_med_size, throttle_notional_usd,
+             verdict, classified_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                scan_id,
+                c.event_id,
+                c.event_slug,
+                c.event_title,
+                c.category_tag,
+                c.n_markets,
+                1 if c.neg_risk_augmented else 0,
+                c.direction,
+                c.top_of_book_gap,
+                c.gap_at_small_size,
+                c.gap_at_med_size,
+                c.throttle_notional_usd,
+                c.verdict,
+                classified_at,
+            ),
+        )
+    conn.commit()
+    return scan_id
