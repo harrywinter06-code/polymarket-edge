@@ -1,9 +1,11 @@
 """Bootstrap confidence intervals for the Hyperliquid funding-capture backtest.
 
-The base `backtest_top_k_trailing` reports a point estimate over N=56 rebalances
-(30-day sample). A Sharpe of 37 on N=56 has wide error bars, and the founder-
-facing claim needs them stated. This module implements a standard nonparametric
-percentile bootstrap over the per-period returns series:
+The base `backtest_top_k_trailing` reports a point estimate over the per-period
+returns series. Even on year-scale data (n=1,093 rebalances at 8h cadence on
+12 majors) the Sharpe point estimate has non-trivial error bars; the same
+machinery scales down to the older N=56 small-sample case. This module
+implements a standard nonparametric percentile bootstrap over the per-period
+returns series:
 
   - Resample the per-period return vector with replacement, same length.
   - Compute annualized return and Sharpe on each resample using the same

@@ -393,9 +393,11 @@ The numbers in this note overstate net realizable P&L. Specifically:
     measured in token units, not USD notional — the default selector skews
     toward memecoins. For majors (BTC/ETH/SOL etc.) the funding rate has a
     floor at the 10.95% APR base rate.
-  - 30 days of history is a small sample. Sharpe on small N is noisy and the
-    universe composition has structural shifts (new perp listings, OI
-    shocks) that the backtest does not adjust for.
+  - The backtest is on the universe of coins that exist *now*; survivorship
+    bias is mitigated (mid-period listings only contribute where they have
+    data — see `_union_grid`) but the universe-at-time-t feed needed to
+    correct it fully comes from the daily `hl_universe_snapshots` cron and
+    is forward-only.
 
 - **Paper-trading**:
   - P&L is linear-approximation in the gap, not the true sum-of-prices math

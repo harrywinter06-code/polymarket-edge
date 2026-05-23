@@ -66,7 +66,7 @@ def test_fetch_funding_history_returns_list_or_empty(mock_http) -> None:
 
 
 def test_fetch_funding_history_handles_non_list_payload(mock_http) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b'{"unexpected": "shape"}')
 
     mock_http(handler)
@@ -76,6 +76,72 @@ def test_fetch_funding_history_handles_non_list_payload(mock_http) -> None:
             return await hyperliquid.fetch_funding_history(client, "BTC", start_ms=0)
 
     assert asyncio.run(runner()) == []
+
+
+def test_fetch_funding_history_chunked_walks_full_window(mock_http) -> None:
+    """A wider-than-chunk window is split into chunk_days slices; each call's
+    payload is concatenated. Verifies the fix for the 500-row HL API cap."""
+    chunk_days = 7
+    window_days = 21  # exactly 3 chunks
+    start_ms = 1_700_000_000_000
+    end_ms = start_ms + window_days * 86_400 * 1000
+
+    chunk_starts: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        chunk_starts.append(int(body["startTime"]))
+        # Return 168 hourly rows per 7-day chunk.
+        t0 = int(body["startTime"])
+        rows = [
+            {"coin": body["coin"], "fundingRate": "0.0001", "time": t0 + i * 3_600_000}
+            for i in range(168)
+        ]
+        return httpx.Response(200, content=json.dumps(rows).encode())
+
+    mock_http(handler)
+
+    async def runner() -> list:
+        async with httpx.AsyncClient() as client:
+            return await hyperliquid.fetch_funding_history_chunked(
+                client, "BTC",
+                start_ms=start_ms, end_ms=end_ms,
+                chunk_days=chunk_days, rate_limit_seconds=0.0,
+            )
+
+    rows = asyncio.run(runner())
+    assert len(rows) == 168 * 3
+    # Three chunk starts at 0, 7d, 14d (in ms).
+    expected_starts = [start_ms + i * chunk_days * 86_400 * 1000 for i in range(3)]
+    assert chunk_starts == expected_starts
+
+
+def test_fetch_funding_history_chunked_handles_partial_final_chunk(mock_http) -> None:
+    """Last chunk's endTime is the window end, not start + chunk_days."""
+    chunk_days = 7
+    start_ms = 1_700_000_000_000
+    end_ms = start_ms + 10 * 86_400 * 1000  # 10 days -> 2 chunks (7d + 3d partial)
+    seen: list[tuple[int, int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append((int(body["startTime"]), int(body["endTime"])))
+        return httpx.Response(200, content=b"[]")
+
+    mock_http(handler)
+
+    async def runner() -> list:
+        async with httpx.AsyncClient() as client:
+            return await hyperliquid.fetch_funding_history_chunked(
+                client, "BTC",
+                start_ms=start_ms, end_ms=end_ms,
+                chunk_days=chunk_days, rate_limit_seconds=0.0,
+            )
+
+    asyncio.run(runner())
+    assert len(seen) == 2
+    # Final chunk's end is the original window end, not start+chunk.
+    assert seen[-1][1] == end_ms
 
 
 def test_fetch_funding_history_many_iterates_each_coin(mock_http) -> None:

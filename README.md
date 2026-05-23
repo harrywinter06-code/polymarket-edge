@@ -2,51 +2,45 @@
 
 [![ci](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml/badge.svg)](https://github.com/harrywinter06-code/polymarket-edge/actions/workflows/ci.yml)
 
-A Hyperliquid funding-capture backtest validated on **365 days × 6 majors**, plus a depth-aware microstructure scanner on Polymarket negRisk events.
+A Hyperliquid funding-capture backtest validated on **365 days × 12 majors** (BTC, ETH, SOL, XRP, DOGE, AVAX, BNB, LINK, ARB, OP, SUI, TRX — 105,120 hourly ticks), plus a depth-aware microstructure scanner on Polymarket negRisk events.
 
 ## Headline finding
 
-**Trailing-K funding-capture, top-5 / trail-24h / rebalance-8h, validated walk-forward across 19 sliding 60d-train / 30d-test windows on BTC, ETH, SOL, XRP, DOGE, AVAX:**
+**Trailing-K funding-capture, top-5 / trail-24h / rebalance-8h, validated walk-forward across 20 sliding 60d-train / 30d-test windows on 12 majors:**
 
-- **In-sample mean annualized: +7.73%**
-- **Out-of-sample mean annualized: +6.38%**
-- **Decay (IS − OOS): +1.35 pp** — mild, conventional direction, **not over-fit**
-- **18 of 19 OOS windows positive**; only window 13 (Feb 2026, Fed-cut repricing) produced an OOS loss of −0.95%
-- **Block-bootstrap 95% CI on annualized OOS return: [+6.32%, +9.56%]** — excludes zero (n=1092 per-period returns, optimal block length 10 by Politis-White)
+- **In-sample mean annualized: +11.09%**
+- **Out-of-sample mean annualized: +10.06%**
+- **Decay (IS − OOS): +1.03 pp** — mild, conventional direction, **not over-fit**
+- **20 of 20 OOS windows positive** (every window cleared zero)
+- **Stationary block-bootstrap 95% CI on annualized return: [+9.78%, +13.59%]** — excludes zero (n=1093 per-period returns, optimal block length 10 by Politis-White)
 
-Regime decomposition by trailing-7d BTC realized volatility (terciles):
-
-| regime | N | ann return | bootstrap CI | Sharpe |
-|---|---|---|---|---|
-| low BTC vol | 200 | **+6.94%** | [+6.40%, +7.46%] | +58.9 |
-| med BTC vol | 202 | +3.12% | [+2.34%, +3.86%] | +18.6 |
-| high BTC vol | 202 | +2.96% | [+1.98%, +3.90%] | +14.4 |
-
-Low-vol captures ~2× the carry of med/high. Sharpe values are inflated because this is *gross* funding-capture only — execution costs at the 8h cadence push net returns negative (see [§ Hyperliquid cost reality](#hyperliquid--cost-reality) below). Real-money deployable variant is the regime-conditional version at lower rebalance frequency.
+Sharpe values on gross funding-capture alone are inflated; execution costs at the 8h cadence push net returns negative (see [§ Hyperliquid — cost reality](#hyperliquid--cost-reality)). The deployable result is the **cadence-frontier cell at ≥ 2-weekly rebalance**.
 
 Full year-data audit including everything that didn't survive: [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md). Self-audit log of every claim through the build, with what was walked back: [REDTEAM.md](REDTEAM.md). Polymarket microstructure case studies: [MICROSTRUCTURE.md](MICROSTRUCTURE.md). Single-file browser dashboard: [`dashboard.html`](dashboard.html). Execution runway: [`EXECUTION.md`](EXECUTION.md).
 
 ## Hyperliquid — cost reality
 
-The +6.4% OOS mean is gross of execution. A separate analysis ([REDTEAM §3b](REDTEAM.md), `hl_hedge.py`) models the spread cost of the short-perp + long-spot hedge: at 5 bps/leg (20 bps round-trip per rebalance), the headline 8h cadence collapses to net-negative because the gross carry per 8h period (~1.7 bps) is smaller than the cost. Breakeven is ~0.43 bps/leg. The strategy is real but the natural cadence isn't tradeable at retail execution costs; the salvageable version runs at weekly+ rebalance, where the spread cost amortizes over a larger gross return.
+The +10.06% OOS mean is gross of execution. The spread-cost-aware analysis ([REDTEAM §3b](REDTEAM.md), `hl_hedge.py`) models the round-trip cost of the short-perp + long-spot hedge: at 5 bps/leg (20 bps round-trip per rebalance), the headline 8h cadence collapses to net-negative because the gross carry per 8h period (~1.5 bps) is smaller than the cost. The deployable variant lives at weekly+ cadence, where the spread cost amortises over a larger gross interval.
 
-The honest one-line summary: **+6.4% OOS gross over 19 walk-forward windows on year data, but consumed by realistic execution at 8h cadence — viable only at lower rebalance frequencies, where the regime-conditional low-vol cell does most of the work.**
+The honest one-line summary: **+10.06% OOS gross over 20 walk-forward windows on the year, but consumed by realistic execution at 8h cadence — viable only at ≥ 2-weekly rebalance, where net Sharpe goes positive.**
 
 ### Cadence frontier
 
 The natural way to frame this is: at what rebalance cadence does the strategy clear costs? Sweep with `polymarket-edge hl-cadence-frontier`:
 
 ```
-cadence  n_reb  gross_ann   net_ann  net_sharpe  breakeven_bps
-     8h   ~1k    +0.064    −2.00      −5.0           0.43
-    24h   ~350   +0.062    −0.59      −2.1           1.30
-    72h   ~120   +0.060    −0.04      −0.1           3.85
-   168h   ~50    +0.058    +0.038     +0.6           8.90
-   336h   ~25    +0.053    +0.043     +0.4          18.0
-   720h   ~12    +0.041    +0.039     +0.2          42.0
+ cadence  n_reb  gross_ann    net_ann  net_sharpe  breakeven_bps
+      8h   1093    +0.1151    -2.0749     -645.68          0.26
+     24h    363    +0.1079    -0.6221     -128.17          0.74
+     72h    120    +0.0938    -0.1495      -19.56          1.93
+    168h     51    +0.0930    -0.0113       -1.15          4.46
+    336h     25    +0.0906    +0.0385       +3.19          8.69
+    720h     12    +0.0730    +0.0487       +3.80         15.01
 ```
 
-Numbers above are illustrative — run `hl-cadence-frontier` against your local DB once `hl-history --days 365` has populated it. The break-even cadence is the project's primary deployable finding: the carry signal is durable, and the engineering question is execution latency, not signal quality.
+**Break-even cadence at 5 bp/leg: ≥ 336h (2-weekly).** Net annualised goes from −207% at 8h → +3.85% at 2-weekly → +4.87% at monthly. The carry signal is durable; the engineering question is execution latency, not signal quality. Below 2-weekly, costs dominate; at monthly, gross carry has fallen (mean-reversion of extreme funders) but net Sharpe is highest because volatility falls faster than gross return.
+
+![Cadence frontier](cadence_frontier.png)
 
 ### Reproducing the numbers
 
@@ -136,25 +130,25 @@ This is the core finding of the project. A top-of-book gap detector flags all th
 
 **These three cases are moment-in-time depth analyses.** Top-of-book gaps shift hourly with market activity. As of a re-snapshot 18 hours after the original capture, the World Cup leg still holds at +144bp at $1K/market (Iran throttles at $2.8K); the Weinstein and Election gaps have both compressed below the detector's 50bp threshold. The World Cup case is the durable one; Weinstein/Election are the *kind* of patterns the detector + depth model surface, captured for the writeup at the moment they were flagged. Run `polymarket-edge depth <slug>` to verify against current state.
 
-**Hyperliquid — GROSS backtest sensitivity (30d, 18,500 hourly ticks, 38 perps).**
+**Hyperliquid — GROSS backtest sensitivity (365d, 105,120 hourly ticks, 12 majors).**
 
 | top_K | trail | rebal | n | annualized | Sharpe | hit% |
 |---|---|---|---|---|---|---|
-| 3 | 24h | 8h | 56 | **+21.5%** | +28.7 | 92.9% |
-| 5 | 24h | 8h | 56 | +19.0% | +37.0 | 98.2% |
-| 10 | 24h | 8h | 56 | +14.9% | +49.5 | 98.2% |
-| perfect-hindsight K=5 | — | 8h | 59 | +22.3% | +39.5 | 100.0% |
-| passive short BTC | — | 8h | 62 | +2.3% | +13.4 | 66.1% |
+| 3 | 24h | 8h | 1,092 | **+12.94%** | +34.93 | 97.9% |
+| 5 | 24h | 8h | 1,093 | +11.51% | +35.83 | 97.3% |
+| 10 | 24h | 8h | 1,093 | +8.31% | +27.95 | 89.5% |
+| perfect-hindsight K=5 | — | 8h | 1,096 | +13.42% | +38.94 | 99.5% |
+| passive short BTC | — | 8h | 1,095 | +7.70% | +27.60 | 83.9% |
 
-Gross decomposition of the +19.0% top-5: ~11.0% comes from the base-rate funding floor (interest-rate component, ~10.95% APR — any coin near zero premium pays shorts this passively). The remaining ~8.0 percentage points are the selection excess from the trailing-mean predictor. The trailing-24h variant recovers ~85% of the perfect-hindsight K=5 ceiling.
+Gross decomposition of the +11.5% top-5: ~7.7% comes from the base-rate funding floor (interest-rate component, ~10.95% APR floor at maximum-leverage clamp on majors — the passive-short-BTC baseline captures it). The remaining ~3.8 percentage points are the selection excess from the trailing-mean predictor. The trailing-24h variant recovers ~86% of the perfect-hindsight K=5 ceiling.
 
-**Bootstrap 95% CI on the headline (N=56 rebalances):**
+**Bootstrap 95% CI on the headline (n=1,093 rebalances, 5,000 resamples, optimal block length 10 by Politis-White):**
 
 | method | annualized return CI | Sharpe CI |
 |---|---|---|
-| IID (naive) | [+14.88%, +23.69%] | [+30.24, +52.83] |
-| **Moving-block (optimal block=2)** | **[+14.08%, +25.18%]** | [+30.38, +55.20] |
-| Stationary bootstrap | [+13.92%, +25.35%] | [+30.37, +56.30] |
+| IID (naive) | [+10.88%, +12.16%] | [+31.99, +40.83] |
+| Moving-block | [+10.05%, +13.19%] | [+30.77, +45.94] |
+| **Stationary bootstrap** | **[+9.78%, +13.59%]** | [+30.71, +46.96] |
 
 Funding returns are autocorrelated (ACF(1) = +0.574) — IID resampling under-states the variance. Block bootstrap widens the annualized-return CI by **~28%** and the Sharpe CI by ~12%. The honest defensible band is **[+14.1%, +25.2%]**, not the IID [+14.9%, +23.7%]. Run via `polymarket-edge hl-ci-block`.
 
@@ -208,8 +202,8 @@ This is the honest answer to the question "what's the Sharpe really?": **depends
 - **Fee model.** Polymarket fees are per-category and probability-curved (peaked at 50%), not the flat 2% I initially assumed. Sports 0.75%, Politics 1.0%, Geopolitical 0%, Culture ~1.25%, Crypto 1.8%, Makers 0% + 20-25% rebate. The "fee-clearable" column above is taker-side; maker-only execution clears all listed gaps.
 - **Detector vs depth.** The event-level `detector` reads top-of-book only — useful for flagging candidates, but it cannot tell a real signal from a trap. The `book_depth` module is what makes the signal actionable; the depth pass is mandatory before any size sizing.
 - **No historical Polymarket backtest.** CLOB `/prices-history` floors at 12h granularity for resolved markets ([py-clob-client#216](https://github.com/Polymarket/py-clob-client/issues/216)), so an execution-grade historical backtest is infeasible. The forward-observation persistence study fills the gap. Best run so far: **52 trajectories over 13 polls / 25 minutes** on 4 distinct flagged events (after several earlier runs OOMed on the host page file). Mean `|gap|` = 1.4%, p90 = 3.2%, max 3.2%. The decay-toward-zero over a 5-minute hold averaged effectively zero — the flagged gaps **persisted** during the observation window rather than decaying away, which is what you'd want for tradeability but it's a 25-minute / 4-event sample, not strong evidence. A multi-day run on a host with more virtual memory would settle it.
-- **Hyperliquid backtest** had hedge-leg cost modeled in a follow-on pass (`hl_hedge.py`): at 5 bps per leg (20 bps round-trip) the headline +19% becomes **−200% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. Salvageable only at weekly+ rebalance. Coin universe is "currently listed with 30d history available" — listing/delisting survivorship not corrected.
-- **Sample size.** 30 days = ~56 rebalances. Sharpe on N=56 is noisy; confidence intervals are wide.
+- **Hyperliquid backtest** has hedge-leg cost modeled in `hl_hedge.py`: at 5 bps per leg (20 bps round-trip per rebalance) the headline +11.5% gross becomes **−207% annualized at 8h cadence**. The carry signal is genuinely consumed by execution costs at the original rebalance frequency. The cadence frontier (see §Headline finding) shows net Sharpe flipping positive at ≥ 2-weekly rebalance; that is the deployable region. Survivorship handling: the backtest uses `_union_grid` semantics so mid-period listings only contribute where they have data, but the full universe-at-time-t correction requires forward-only `hl_universe_snapshots` data being accumulated by the daily cron.
+- **Sample size.** Year-scale: n=1,093 rebalances at 8h cadence. Block-bootstrap CIs are tight (see headline). The earlier 30-day window (n≈56) had wide CIs and is preserved in [YEAR_ANALYSIS.md](YEAR_ANALYSIS.md) for comparison.
 - **Pattern novelty.** NegRisk event-level arbitrage is a known pattern; a public Go SDK ships a `find-negrisk-opportunities` example, and there's at least one arXiv paper on the topic. This is a clean, defensible, public-API-only Python implementation with sensitivity analysis and an explicit red-team audit — not novel research.
 
 ## Polymarket — projected maker yield on the World Cup basket

@@ -1,6 +1,6 @@
 # polymarket-edge — research note
 
-Generated: 2026-05-22 00:34
+Generated: 2026-05-23 12:55
 
 ## What we built and why
 
@@ -24,7 +24,7 @@ must equal 1.0. Any deviation is potential arb (modulo fees).
 | market_snapshots | 1,440 |
 | event_arb_signals | 36 |
 | signal_trajectories | 772 |
-| hl_funding_history | 18,500 |
+| hl_funding_history | 119,620 |
 | paper_positions | 11 |
 
 ## Polymarket — event-level no-arb signals
@@ -85,7 +85,7 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
 
 ## Hyperliquid — funding-capture backtest
 
-**Dataset:** 18,500 hourly funding ticks across 37 coins.
+**Dataset:** 119,620 hourly funding ticks across 41 coins.
 
 ![Funding APR per coin](funding_apr_per_coin.png)
 
@@ -97,45 +97,45 @@ microstructure inefficiency that is being arbed away by the time fees clear it.
 | AZTEC | +14.5% | 0.8% |
 | DOOD | +12.0% | 0.1% |
 | kBONK | +11.9% | 0.1% |
+| LINK | +11.7% | 0.2% |
 | HEMI | +11.4% | 0.4% |
 | HMSTR | +11.4% | 0.3% |
 | LINEA | +11.3% | 0.0% |
 | kPEPE | +10.9% | 0.1% |
-| DOGE | +10.8% | 0.0% |
-| LINK | +10.7% | 0.1% |
+| ASTER | +10.4% | 0.1% |
 
 **Gross strategy results (rebalance 8h, top-K = 5, trailing window = 24h):**
 
 | strategy | n_rebalances | total | annualized | ann_vol | sharpe | mdd | hit |
 |---|---|---|---|---|---|---|---|
-| top5_trail24h_rebal8h | 56 | +0.0097 | +0.1903 | 0.0051 | +36.98 | 0.0001 | 98.2% |
-| perfect_top5_rebal8h | 59 | +0.0120 | +0.2229 | 0.0056 | +39.65 | 0.0000 | 100.0% |
-| passive_short_BTC_rebal8h | 62 | +0.0013 | +0.0229 | 0.0017 | +13.43 | 0.0005 | 66.1% |
+| top5_trail24h_rebal8h | 1093 | +0.1149 | +0.1151 | 0.0032 | +35.83 | 0.0004 | 97.3% |
+| perfect_top5_rebal8h | 1096 | +0.1343 | +0.1342 | 0.0034 | +38.94 | 0.0002 | 99.5% |
+| passive_short_BTC_rebal8h | 1095 | +0.0770 | +0.0770 | 0.0028 | +27.60 | 0.0015 | 83.9% |
 
 ![Cumulative gross P&L](hl_cumulative_pnl.png)
 
-The trailing-mean predictor captures **81%** of the
+The trailing-mean predictor captures **86%** of the
 perfect-hindsight ceiling on a GROSS basis. But the Sharpe is the carry-only
 upper bound — it ignores the round-trip execution cost of the perp + spot
 hedge legs.
 
-**Bootstrap 95% CI on the headline (top-5 trail-24h rebal-8h, 56 rebalances, 2000 resamples):**
+**Bootstrap 95% CI on the headline (top-5 trail-24h rebal-8h, 1093 rebalances, 2000 resamples):**
 
 | metric | point | 95% CI |
 |---|---|---|
-| annualized return | +0.1903 | [+0.1502, +0.2374] |
-| sharpe | +36.98 | [+29.91, +53.07] |
+| annualized return | +0.1151 | [+0.1088, +0.1214] |
+| sharpe | +35.83 | [+31.96, +40.94] |
 
 
 **Net of 5 bps per leg (20 bps round-trip per rebalance):**
 
 | rebalance | n | gross annualized | net annualized | net Sharpe |
 |---|---|---|---|---|
-| 8h | 56 | +0.1903 | -1.9997 | -388.62 |
-| 24h | 18 | +0.1645 | -0.5655 | -70.90 |
-| 72h | 6 | +0.0497 | -0.1936 | -10.29 |
-| 168h | 2 | +0.0802 | -0.0241 | -2.71 |
-| 336h | 1 | +0.0657 | +0.0135 | +0.00 |
+| 8h | 1093 | +0.1151 | -2.0749 | -645.68 |
+| 24h | 363 | +0.1079 | -0.6221 | -128.17 |
+| 72h | 120 | +0.0938 | -0.1495 | -19.56 |
+| 168h | 51 | +0.0930 | -0.0113 | -1.15 |
+| 336h | 25 | +0.0906 | +0.0385 | +3.19 |
 
 At the headline 8h cadence, **the carry signal is entirely consumed by
 realistic execution costs**: net annualized is roughly -200%. The strategy is
@@ -190,9 +190,11 @@ The numbers in this note overstate net realizable P&L. Specifically:
     measured in token units, not USD notional — the default selector skews
     toward memecoins. For majors (BTC/ETH/SOL etc.) the funding rate has a
     floor at the 10.95% APR base rate.
-  - 30 days of history is a small sample. Sharpe on small N is noisy and the
-    universe composition has structural shifts (new perp listings, OI
-    shocks) that the backtest does not adjust for.
+  - The backtest is on the universe of coins that exist *now*; survivorship
+    bias is mitigated (mid-period listings only contribute where they have
+    data — see `_union_grid`) but the universe-at-time-t feed needed to
+    correct it fully comes from the daily `hl_universe_snapshots` cron and
+    is forward-only.
 
 - **Paper-trading**:
   - P&L is linear-approximation in the gap, not the true sum-of-prices math

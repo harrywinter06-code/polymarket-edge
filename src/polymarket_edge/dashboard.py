@@ -510,9 +510,10 @@ def _build_html(conn: sqlite3.Connection, png_dir: Path) -> str:
     <h2>Limitations</h2>
     <p>Every headline number above is gross of execution cost on the Hyperliquid side and
     top-of-book on the Polymarket side. The full self-audit lives in
-    <code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 30 days
-    (~56 rebalances) &mdash; Sharpe confidence intervals are wide, and listing/delisting
-    survivorship is uncorrected.</p>
+    <code>REDTEAM.md</code>. Sample size on the Hyperliquid backtest is 365 days
+    (1,093 rebalances at the 8h cadence, 12 majors). Sharpe is the carry-only upper
+    bound &mdash; net of 5 bp/leg spread the 8h cadence collapses to &minus;207%;
+    deployable region is the &ge; 2-weekly slice of the cadence frontier.</p>
   </section>
 
   <footer>

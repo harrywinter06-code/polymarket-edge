@@ -22,6 +22,9 @@ HL_INFO_URL = "https://api.hyperliquid.xyz/info"
 DEFAULT_TIMEOUT = 30.0
 RATE_LIMIT_SECONDS = 0.2
 HOURS_PER_YEAR = 24 * 365
+# Hyperliquid's fundingHistory endpoint caps responses at 500 rows; for
+# windows wider than ~21 days we have to chunk to get the full series.
+FUNDING_HISTORY_CHUNK_DAYS = 7
 
 
 def now_ms() -> int:
@@ -50,7 +53,12 @@ async def fetch_funding_history(
     start_ms: int,
     end_ms: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return historical funding rows: [{coin, fundingRate, premium, time}, ...]."""
+    """Return historical funding rows: [{coin, fundingRate, premium, time}, ...].
+
+    Single-call form. Hyperliquid caps each response at 500 rows; callers
+    asking for windows beyond ~21 days should use
+    ``fetch_funding_history_chunked`` to walk through chunks.
+    """
     body: dict[str, Any] = {"type": "fundingHistory", "coin": coin, "startTime": start_ms}
     if end_ms is not None:
         body["endTime"] = end_ms
@@ -60,18 +68,52 @@ async def fetch_funding_history(
     return out if isinstance(out, list) else []
 
 
+async def fetch_funding_history_chunked(
+    client: httpx.AsyncClient,
+    coin: str,
+    *,
+    start_ms: int,
+    end_ms: int,
+    chunk_days: int = FUNDING_HISTORY_CHUNK_DAYS,
+    rate_limit_seconds: float = RATE_LIMIT_SECONDS,
+) -> list[dict[str, Any]]:
+    """Walk the [start_ms, end_ms) window in fixed-size chunks.
+
+    Hyperliquid's fundingHistory caps responses at 500 rows. A 7-day chunk
+    contains 168 hourly funding ticks, well under the cap, so the chunked
+    series is complete. Adjacent chunks may overlap on the boundary tick;
+    duplicate rows dedupe naturally via the UNIQUE (coin, t) constraint
+    on insert.
+    """
+    chunk_ms = chunk_days * 86_400 * 1000
+    out: list[dict[str, Any]] = []
+    cursor = start_ms
+    while cursor < end_ms:
+        nxt = min(cursor + chunk_ms, end_ms)
+        page = await fetch_funding_history(client, coin, start_ms=cursor, end_ms=nxt)
+        out.extend(page)
+        cursor = nxt
+        if cursor < end_ms:
+            await asyncio.sleep(rate_limit_seconds)
+    return out
+
+
 async def fetch_funding_history_many(
     coins: list[str],
     *,
     days: int,
     timeout: float = DEFAULT_TIMEOUT,
+    chunk_days: int = FUNDING_HISTORY_CHUNK_DAYS,
 ) -> dict[str, list[dict[str, Any]]]:
+    """Pull `days` of funding history for many coins, chunked under the 500-row cap."""
     end_ms = now_ms()
     start_ms = end_ms - days * 86_400 * 1000
     out: dict[str, list[dict[str, Any]]] = {}
     async with httpx.AsyncClient(timeout=timeout) as client:
         for coin in coins:
-            out[coin] = await fetch_funding_history(client, coin, start_ms=start_ms, end_ms=end_ms)
+            out[coin] = await fetch_funding_history_chunked(
+                client, coin, start_ms=start_ms, end_ms=end_ms, chunk_days=chunk_days
+            )
             await asyncio.sleep(RATE_LIMIT_SECONDS)
     return out
 
