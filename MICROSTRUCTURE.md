@@ -166,6 +166,8 @@ PYTHONPATH=src python scripts/trap_classifier_train.py
 
 ## Hyperliquid funding extremes -- directional study
 
+> ⚠ **Year-scale walk-back.** This section captures the **22-day** window finding from 2026-05-22. The year-scale re-run in [REDTEAM.md §9](REDTEAM.md) and [YEAR_ANALYSIS.md §4](YEAR_ANALYSIS.md) shows **zero of 18 cells survive Bonferroni at cooldown=72h on year data** — the 22-day t-stats up to +7.09 were driven by clustered events on the same coin within the short window, exactly the failure mode the cooldown check is designed to catch once N is large enough. The largest |t| anywhere in the year-scale family is 2.26, far below the 3.05 Bonferroni threshold. The "deployable trade" framing at the end of this section has been **retracted**; the small-N capture is kept here as the working-window snapshot, not as a claim about a tradeable signal.
+
 The README's existing top-K-funding-shorts backtest averages across every positive-funding coin and reports the short-side carry. This section answers a sharper question: **at the tail of the funding distribution -- hours where the rate is >2 sample-stdevs above its own 168h trailing mean for that coin -- does the perp price subsequently rally or crash over the next 24h?** The conventional intuition is high-funding = longs paying through the nose = price about to crash, short the perp; the contrarian intuition is high-funding = shorts crowded = squeeze coming, buy the perp. Both are tradeable if true. This study, captured 2026-05-22 against 22 days of `hl_funding_history` and a fresh pull of hourly perp candles for 37 Hyperliquid coins (`scripts/hl_extremes_study.py`, output `results/hl_extremes_20260522T014401.json`), tests both directly.
 
 ### Method
@@ -219,9 +221,11 @@ There is no statistically robust directional edge at extreme POSITIVE funding un
 - **End-of-window truncation.** Entries within the last 72h of the data window cannot compute a 72h exit; they are dropped, not back-imputed.
 - **Funding is approximated as a simple sum** over the hold window -- consistent with the existing `hl_backtest.backtest_passive` convention; compounding would change the second-decimal of the per-event funding-paid number but not the sign or significance of the result.
 
-### Trade implication
+### Trade implication (retracted at year scale — see banner at top of section)
 
-The deployable trade emerging from this study is **long the perp at z < -2 negative-funding extremes, hold 24-72h**. The standard short-at-high-funding trade does NOT have a sharper edge at the 24h horizon than the existing trailing-K strategy; the magnitude grows only at the 72h horizon and even there it does not survive the independence cooldown. Sizing for the negative-funding long trade should use the existing depth-walking primitive from `microstructure.py` against the HL perp book; the trade is 24h-hold-from-extreme.
+~~The deployable trade emerging from this study is **long the perp at z < -2 negative-funding extremes, hold 24-72h**.~~
+
+The 22-day cooldown=0 Bonferroni survivors do not replicate at year-scale N with cooldown=72h: zero of the 18 cells clear |t| > 3.05 (see [YEAR_ANALYSIS.md §4](YEAR_ANALYSIS.md)). The honest reading is that the small-window result was clustered-event variance, not a durable directional edge. The standard short-at-high-funding trade also does not have a sharper edge at the 24h horizon than the existing trailing-K strategy. This section is preserved as the working snapshot; no deployable trade survives from it.
 
 ### Reproducing
 

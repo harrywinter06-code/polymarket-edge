@@ -1,15 +1,4 @@
-"""Single-file self-contained HTML dashboard generator.
-
-Translates the markdown REPORT.md structure into a portable HTML document
-with embedded base64 chart images and inline CSS — zero external assets,
-zero JavaScript. The output is one file that opens identically when emailed,
-hosted on a static URL, or attached to a job application.
-
-The same SQL/backtest entry points used by `report.py` are reused here so the
-two views never disagree. Layout deliberately omits the persistence section
-(no analytical content the README hasn't already framed) in favor of leading
-with the depth-vs-trap finding, which is the deliverable's headline.
-"""
+"""Self-contained HTML dashboard. Base64-embedded charts, inline CSS, no JS."""
 
 from __future__ import annotations
 
@@ -22,17 +11,16 @@ from pathlib import Path
 
 from polymarket_edge import hl_backtest, hl_hedge, report
 
-# Header copy, hand-curated from README "What it does" — deliberately not
-# parsed from markdown so the dashboard framing stays editorial.
 _HEADER_BLURB = (
-    "Event-level no-arb scanner for Polymarket mutually-exclusive (negRisk) markets, "
-    "plus a Hyperliquid funding-capture backtest. Every headline number below has been "
-    "red-teamed; the depth-vs-trap and net-of-spread tables are where the project earns "
-    "its keep."
+    "Depth-aware microstructure scanner for Polymarket negRisk events, plus a "
+    "365-day funding-capture backtest on Hyperliquid perpetuals. Count-based "
+    "trap rate on Polymarket flags is 56-77%; volume-weighted it is 0.012%, "
+    "because one event (the 2026 FIFA World Cup) carries 95.9% of flagged "
+    "dollars. The Hyperliquid carry signal is durable out-of-sample but does "
+    "not survive 5 bp/leg execution at the headline 8h cadence; net Sharpe "
+    "is positive only at >= 2-weekly rebalance."
 )
 
-# Hand-curated from README §"Results" + REDTEAM §3a. Hardcoded per spec —
-# this is the project's headline finding and the values are stable.
 # (event, n_markets, top_of_book_gap, gap_depth_aware_at_1k, verdict, class)
 _DEPTH_FINDINGS: tuple[tuple[str, str, str, str, str, str], ...] = (
     (
@@ -100,9 +88,12 @@ def _kpi_grid(conn: sqlite3.Connection, test_count: int) -> str:
     """Combined cross-venue KPI grid for the `dashboard.html` view."""
     n_events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     cards = [
-        _kpi_card(f"{n_events:,}", "Polymarket events scored"),
-        _kpi_card("+150 bp", "World Cup gap @ $1K/market", anchor="depth"),
-        _kpi_card("+11.5% / -207%", "Hyperliquid gross / net annualized (8h cadence)"),
+        _kpi_card(f"{n_events:,}", "Polymarket events ingested (lifetime)"),
+        _kpi_card("0.012%", "Volume-weighted trap rate", anchor="depth"),
+        _kpi_card(
+            "+11.0% [+9.4, +13.0]",
+            "HL gross ann return, stationary block-bootstrap 95% CI",
+        ),
         _kpi_card(str(test_count), "Tests passing"),
     ]
     return '<section class="kpis">' + "".join(cards) + "</section>"
@@ -129,9 +120,9 @@ def _polymarket_kpi_grid(conn: sqlite3.Connection, test_count: int) -> str:
         if total:
             trap_rate_label = f"{trap / total * 100:.0f}% trap rate"
     cards = [
-        _kpi_card(f"{n_events:,}", "Active events scored"),
-        _kpi_card("+150 bp", "World Cup gap @ $1K/market", anchor="depth"),
-        _kpi_card(trap_rate_label, "Most-recent microstructure scan"),
+        _kpi_card(f"{n_events:,}", "Events ingested (lifetime)"),
+        _kpi_card("0.012%", "Volume-weighted trap rate", anchor="depth"),
+        _kpi_card(trap_rate_label, "Count-based, latest scan"),
         _kpi_card(str(test_count), "Tests passing"),
     ]
     return '<section class="kpis">' + "".join(cards) + "</section>"
@@ -140,9 +131,12 @@ def _polymarket_kpi_grid(conn: sqlite3.Connection, test_count: int) -> str:
 def _hyperliquid_kpi_grid(_conn: sqlite3.Connection, test_count: int) -> str:
     """Hyperliquid-focused KPI grid: cadence-frontier and OOS validation are headline."""
     cards = [
-        _kpi_card("+11.5%", "Gross annualised (n=1,093 rebal, 12 majors, 365d)"),
+        _kpi_card(
+            "+11.0% [+9.4, +13.0]",
+            "Gross ann return, stationary block-bootstrap 95% CI (n=1,093)",
+        ),
         _kpi_card("20 / 20", "OOS walk-forward windows positive"),
-        _kpi_card("≥ 336h", "Break-even cadence at 5 bp/leg"),
+        _kpi_card(">= 336h", "Break-even cadence at 5 bp/leg"),
         _kpi_card(str(test_count), "Tests passing"),
     ]
     return '<section class="kpis">' + "".join(cards) + "</section>"
@@ -358,6 +352,17 @@ def _microstructure_section(conn: sqlite3.Connection) -> str:
         "</tr></thead><tbody>"
         + "".join(rows_html) +
         "</tbody></table>"
+        "<p class='muted' style='font-size:13px;margin-top:8px;'>"
+        "Single-row categories (n=1) are individual events flagged in this "
+        "scan window, not population statistics. A &quot;100% trap rate&quot; "
+        "row for Soccer here is one low-volume match, not the 2026 FIFA "
+        "World Cup event in the depth-vs-trap table above (which remains "
+        "the durable real signal across re-scans). The robust population "
+        "statistic is the rolled-up trap rate across "
+        "<code>Politics</code> + <code>Elections</code> + <code>US Election</code> + "
+        "<code>Midterms</code> combined, where multi-row sampling is "
+        "consistent: see <code>MICROSTRUCTURE.md</code> for the cumulative "
+        "table.</p>"
     )
 
 
@@ -389,119 +394,105 @@ def _count_tests() -> int:
 
 _CSS = """
 :root {
-  --fg: #0f172a;
-  --muted: #64748b;
-  --muted-strong: #475569;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --bg: #ffffff;
-  --bg-soft: #f8fafc;
-  --accent: #0f172a;
-  --pos-bg: #ecfdf5;
-  --pos-fg: #047857;
-  --neg-bg: #fff1f2;
-  --neg-fg: #be123c;
-  --neutral-bg: #fffbeb;
-  --neutral-fg: #b45309;
-  --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo,
-    Consolas, monospace;
+  --fg: #1c1a17;
+  --muted: #6b6862;
+  --muted-strong: #4a4742;
+  --border: #d9d4cb;
+  --border-strong: #b8b1a4;
+  --bg: #fbfaf6;
+  --bg-soft: #f3f0e8;
+  --accent: #1c1a17;
+  --link: #0f5b8a;
+  --pos-fg: #2e6f3c;
+  --neg-fg: #a8281e;
+  --neutral-fg: #8a5a14;
+  --sans: "Charter", "Iowan Old Style", "Source Serif Pro", Georgia, serif;
+  --mono: ui-monospace, "Menlo", "Consolas", monospace;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--bg-soft); color: var(--fg);
-  font-family: var(--sans); line-height: 1.65; font-size: 15px;
-  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-.container { max-width: 920px; margin: 0 auto; padding: 56px 32px 96px;
-  background: var(--bg); border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border); }
-h1 { font-size: 28px; font-weight: 600; margin: 0 0 6px;
-  letter-spacing: -0.02em; line-height: 1.2; }
-h2 { font-size: 20px; font-weight: 600; margin: 44px 0 12px;
-  letter-spacing: -0.015em; line-height: 1.3;
-  padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-h2:first-of-type { margin-top: 36px; }
-h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px;
-  letter-spacing: -0.01em; }
-.subtitle { color: var(--muted); margin: 0 0 28px; font-size: 13px;
-  font-family: var(--mono); letter-spacing: 0.01em; }
-p { margin: 12px 0; }
-.lead { font-size: 15.5px; color: var(--accent); margin: 0 0 32px;
-  line-height: 1.65; }
-.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
-  margin: 28px 0 16px; }
-.kpi { display: block; padding: 18px 16px; border: 1px solid var(--border-strong);
-  border-radius: 6px; background: var(--bg); text-decoration: none; color: inherit;
-  transition: border-color 120ms ease, transform 120ms ease; }
-.kpi:hover { border-color: var(--accent); }
-.kpi-value { font-family: var(--mono); font-size: 22px; font-weight: 600;
-  letter-spacing: -0.01em; font-variant-numeric: tabular-nums;
-  color: var(--fg); line-height: 1.15; }
-.kpi-label { font-size: 11px; color: var(--muted); margin-top: 8px;
-  text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500;
-  line-height: 1.35; }
-table { width: 100%; border-collapse: collapse; margin: 14px 0 8px;
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+  font-family: var(--sans); line-height: 1.55; font-size: 16px; }
+.container { max-width: 780px; margin: 0 auto; padding: 48px 28px 80px; }
+h1 { font-size: 26px; font-weight: 700; margin: 0 0 4px; line-height: 1.25; }
+h2 { font-size: 19px; font-weight: 700; margin: 40px 0 10px; line-height: 1.3;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+h2:first-of-type { margin-top: 32px; }
+h3 { font-size: 16px; font-weight: 700; margin: 22px 0 6px; }
+.subtitle { color: var(--muted); margin: 0 0 24px; font-size: 13px;
+  font-family: var(--mono); }
+p { margin: 10px 0; }
+.lead { font-size: 16px; color: var(--fg); margin: 0 0 28px; line-height: 1.6; }
+.kpis { display: flex; flex-wrap: wrap; gap: 0; margin: 24px 0 8px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: 14px 0; }
+.kpi { display: block; flex: 1 1 0; min-width: 140px; padding: 4px 18px;
+  text-decoration: none; color: inherit;
+  border-left: 1px solid var(--border); }
+.kpi:first-child { border-left: 0; padding-left: 0; }
+.kpi-value { font-family: var(--mono); font-size: 18px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--fg); line-height: 1.2; }
+.kpi-label { font-size: 13px; color: var(--muted); margin-top: 4px;
+  font-weight: 400; line-height: 1.35; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0 6px;
   font-size: 14px; font-variant-numeric: tabular-nums; }
-th, td { padding: 9px 12px; text-align: left; vertical-align: top;
+th, td { padding: 7px 10px; text-align: left; vertical-align: top;
   border-bottom: 1px solid var(--border); }
-thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--muted); font-weight: 600; background: transparent;
-  border-bottom: 1px solid var(--border-strong); padding-bottom: 8px; }
+thead th { font-size: 13px; color: var(--muted-strong); font-weight: 600;
+  background: transparent; border-bottom: 1px solid var(--border-strong);
+  padding-bottom: 6px; }
 tbody tr:last-child td { border-bottom: 1px solid var(--border-strong); }
 td.num, th.num { text-align: right; font-family: var(--mono);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
-.cell-pos { background: var(--pos-bg); color: var(--pos-fg); font-weight: 600;
-  border-radius: 3px; }
-.cell-neg { background: var(--neg-bg); color: var(--neg-fg); font-weight: 600;
-  border-radius: 3px; }
-.cell-neutral { background: var(--neutral-bg); color: var(--neutral-fg);
-  font-weight: 600; border-radius: 3px; }
-code { font-family: var(--mono); font-size: 0.88em; background: var(--bg-soft);
-  padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
-  color: var(--accent); }
-.chart { margin: 16px 0 28px; padding: 0; }
-.chart img { display: block; max-width: 100%; height: auto;
-  border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
-.chart figcaption { font-size: 12px; color: var(--muted); margin-bottom: 8px;
-  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
-.missing { padding: 28px; background: var(--bg-soft); border: 1px dashed var(--border-strong);
-  border-radius: 6px; color: var(--muted); font-size: 13px; text-align: center; }
+.cell-pos { color: var(--pos-fg); font-weight: 600; }
+.cell-neg { color: var(--neg-fg); font-weight: 600; }
+.cell-neutral { color: var(--neutral-fg); font-weight: 600; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--bg-soft);
+  padding: 1px 5px; color: var(--fg); }
+.chart { margin: 14px 0 26px; padding: 0; }
+.chart img { display: block; max-width: 100%; height: auto; }
+.chart figcaption { font-size: 13px; color: var(--muted); margin-bottom: 6px;
+  font-style: italic; }
+.missing { padding: 24px; background: var(--bg-soft);
+  border: 1px dashed var(--border-strong);
+  color: var(--muted); font-size: 13px; text-align: center; }
 .muted { color: var(--muted); }
-.limitations { font-size: 13.5px; color: var(--muted-strong); line-height: 1.6; }
+.limitations { font-size: 14px; color: var(--muted-strong); line-height: 1.55; }
 .limitations h2 { color: var(--muted-strong); }
-a { color: #1d4ed8; text-decoration: none; }
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
-footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border);
-  font-size: 12px; color: var(--muted); line-height: 1.6; font-family: var(--mono); }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); line-height: 1.55; font-family: var(--mono); }
 footer a { color: var(--muted); }
 @media (max-width: 720px) {
-  .container { padding: 32px 18px 72px; border-left: 0; border-right: 0; }
-  h1 { font-size: 24px; }
-  h2 { font-size: 18px; margin-top: 36px; }
+  .container { padding: 28px 16px 60px; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 17px; margin-top: 32px; }
   table { font-size: 13px; }
-  th, td { padding: 7px 8px; }
+  th, td { padding: 6px 7px; }
 }
 @media (max-width: 600px) {
-  .kpis { grid-template-columns: 1fr; }
-  .kpi { padding: 14px 14px; }
-  .kpi-value { font-size: 20px; }
+  .kpis { flex-direction: column; padding: 8px 0; }
+  .kpi { border-left: 0; border-top: 1px solid var(--border); padding: 10px 0; }
+  .kpi:first-child { border-top: 0; }
 }
 """.strip()
 
 
 _POLYMARKET_BLURB = (
-    "Depth-aware microstructure scanner for Polymarket mutually-exclusive (negRisk) "
-    "events. The detector reads top-of-book; the depth-walker walks the full /book "
-    "at realistic notional and splits real signals from the trap-shaped ones. "
-    "Population statistic: 56-77% of detector-flagged events invert to a loss at "
-    "$50/market, concentrated in 2-market US-politics events."
+    "Depth-aware microstructure scanner for Polymarket negRisk events. The detector "
+    "reads top-of-book; the depth-walker fills the full /book at realistic notional "
+    "and separates tradeable signal from trap. Count-based trap rate across recent "
+    "scans is 56-77%; volume-weighted it is 0.012%, because the 2026 FIFA World Cup "
+    "event alone carries 95.9% of flagged dollars. Sizing in proportion to event "
+    "volume routes capital toward the durable signal and away from the trap-prone "
+    "long tail of small US state-election negRisk events."
 )
 
 _HYPERLIQUID_BLURB = (
-    "Funding-capture backtest on Hyperliquid perpetuals over 365 days x 12 majors "
-    "(105,120 hourly ticks). Trailing-K top-5 trail-24h shorts pay +11.5% gross "
-    "annualised at 8h cadence, but execution costs collapse this to -207% net. "
-    "The deployable region is the cadence-frontier cell at >= 2-weekly rebalance."
+    "Funding-capture backtest on Hyperliquid perpetuals: 365 days x 12 majors "
+    "(105,120 hourly ticks). Top-5 trail-24h shorts pay +11.5% gross annualised "
+    "at 8h cadence. Execution costs collapse this to -207% net. Net Sharpe is "
+    "positive only at >= 2-weekly rebalance."
 )
 
 
@@ -510,20 +501,23 @@ def _polymarket_sections(conn: sqlite3.Connection) -> str:
     depth_table = _depth_table()
     micro_section = _microstructure_section(conn)
     return f"""
-  <h2>Top flagged events</h2>
-  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown report uses.</p>
+  <h2>Top flagged events (build-window snapshot, 2026-05-21)</h2>
+  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown report uses. Top-of-book gaps drift hourly with market activity; re-run <code>polymarket-edge scan</code> for the current state.</p>
   {flagged_table}
 
-  <h2 id="depth">Depth-vs-trap (the headline finding)</h2>
+  <h2 id="depth">Depth-vs-trap</h2>
   <p>A top-of-book gap detector flags all three of the cases below. The depth-aware
-  basket model walks each market's full <code>/book</code> at realistic notionals and
-  separates the real signal from the marginal one from the trap.</p>
+  basket model walks each market's full <code>/book</code> at realistic notionals.
+  Real signal at $48K basket (World Cup), marginal at $5K (2028 Election),
+  trap at any size (Weinstein). Captured 2026-05-21; the World Cup case is the
+  durable cross-rescan example, the other two compressed below the detector
+  threshold within ~18 hours.</p>
   {depth_table}
 
   <h2>Live microstructure scan (by category)</h2>
   <p class="muted">Populated by <code>polymarket-edge microstructure-scan</code>.
   Each scan walks the book for every flagged negRisk event at $50 and $500
-  per market and assigns a verdict. Categories show where traps cluster &mdash;
+  per market and assigns a verdict. Categories show where traps cluster:
   2-market US state races dominate.</p>
   {micro_section}
 """
@@ -542,21 +536,21 @@ def _hyperliquid_sections(png_dir: Path, conn: sqlite3.Connection) -> str:
   <h2>Cumulative gross P&amp;L</h2>
   {pnl_chart}
 
-  <h2>Cadence frontier &mdash; the deployable finding</h2>
+  <h2>Cadence frontier</h2>
   <p>At 5 bp/leg the 8h cadence collapses to net &minus;207%; net annualised crosses
-  zero between weekly and 2-weekly. Per-period breakeven on the 8h variant is 0.26 bps/leg
-  &mdash; below any realistic execution cost. The carry signal is durable; the binding
-  constraint is execution latency.</p>
+  zero between weekly and 2-weekly. Per-period breakeven on the 8h variant is
+  0.26 bps/leg, below any realistic execution cost. The carry signal is durable;
+  the binding constraint is execution latency.</p>
   {cadence_chart}
 
-  <h2>Gross strategy results</h2>
-  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h.</p>
+  <h2>Gross strategy results (in-sample, 12-coin universe, 365d)</h2>
+  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h. <strong>Hit% is the share of 8h periods with positive realised funding net</strong>, not directional accuracy: it reflects the persistence of the carry signal, not stock-picking. The 97% number is the property a funding-rate floor at the maximum-leverage clamp creates, not a forecasting skill claim.</p>
   {strategy_table}
 
   <h2>Hedge cost sensitivity by cadence</h2>
-  <p>5 bp per leg (20 bp round-trip) per rebalance. The headline +11.5% gross at 8h
-  cadence becomes &minus;207% net; the cadence at which net annualised first crosses
-  zero is highlighted.</p>
+  <p>5 bp per leg (20 bp round-trip) per rebalance. The +11.5% gross headline at
+  8h cadence becomes &minus;207% net; the cadence at which net annualised first
+  crosses zero is highlighted.</p>
   {hedge_table}
 
   <h2>Funding APR per coin</h2>
@@ -570,13 +564,13 @@ def _limitations_section(scope: str) -> str:
         body = (
             "Polymarket fees are per-category (Sports 0.75%, Politics 1.0%, etc.); "
             "the depth pass is mandatory before sizing because top-of-book reads "
-            "lie on thin-side legs. The trap classifier is at n=30 today &mdash; "
+            "lie on thin-side legs. The trap classifier is at n=30 today: "
             "scaffolding-grade, growing forward via the daily scan cron."
         )
     elif scope == "hyperliquid":
         body = (
             "Sample size on the backtest is 365 days (1,093 rebalances at the 8h "
-            "cadence, 12 majors). Sharpe is the carry-only upper bound &mdash; net "
+            "cadence, 12 majors). Sharpe is the carry-only upper bound: net "
             "of 5 bp/leg spread the 8h cadence collapses to &minus;207%; the "
             "deployable region is the &ge; 2-weekly slice of the cadence frontier."
         )

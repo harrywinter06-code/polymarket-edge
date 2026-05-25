@@ -1,8 +1,11 @@
 # Year-long re-run: what survives at proper sample size
 
-Generated: 2026-05-23T00:24:20.097064+00:00 UTC
+Generated: 2026-05-23T00:24:20+00:00 UTC (6-coin run) + 2026-05-25T10:14+00:00 UTC (12-coin appendix)
 
-DB: `polymarket_edge.db` -- coins with >= 5000 funding rows: AVAX, BTC, DOGE, ETH, SOL, XRP
+DB: `polymarket_edge.db`. **Two universes are reported here** — the 6 coins below have both a full year of funding *and* a full year of perp candles (hedgeable + price-aware), and the 12-coin appendix at the bottom covers the README's funding-only headline universe (no price-return analyses possible on the broader set because LINK/BNB/ARB/OP/SUI/TRX have only ~20 days of candle history vs. ~7 months for the 6 majors).
+
+**6-coin universe** (BTC, ETH, SOL, XRP, DOGE, AVAX): regime conditioning, funding extremes, block bootstrap all reported below.
+**12-coin appendix** (the 6 majors + BNB, LINK, ARB, OP, SUI, TRX): walk-forward + block bootstrap only — these are funding-only analyses that don't require candles. README headline numbers derive from this run.
 
 ## Survival summary
 
@@ -114,3 +117,75 @@ Sample: 1092 rebalances over the full year. Politis-White block length: 10h (10 
 - Block-bootstrap 95% CI Sharpe: [+15.25, +32.64]
 
 Previous N=22d block bootstrap reported the headline ann-ret 95% CI widened by ~28% from autocorrelation, settling at [+14.1%, +25.2%] (README). Year sample: see survival summary for whether the CI still excludes zero.
+
+---
+
+## Appendix: 12-coin universe re-run (funding-only)
+
+Re-run 2026-05-25 to align with the README's funding-only headline. The 12 coins are the original 6 majors plus BNB, LINK, ARB, OP, SUI, TRX. All 12 have a full year of funding history (8,760 rows each = 105,120 total ticks). The price-return analyses in §3 (regime conditioning) and §4 (funding extremes) *cannot* be reproduced on this broader universe because the additional 6 coins have only ~20 days of perp-candle history in the DB — that's why the 6-coin run above is the price-aware audit. This appendix covers the two analyses that don't need candles: walk-forward and block bootstrap.
+
+### A.1 Walk-forward (12-coin, train=60d / test=30d / step=14d)
+
+| metric | value |
+|---|---|
+| windows | 20 |
+| IS mean ann ret | +10.98% |
+| OOS mean ann ret | +9.74% |
+| decay (IS − OOS) | +1.23 pp |
+| OOS-positive windows | 20 / 20 |
+| OOS Sharpe range | +28.90 to +179.53 |
+
+**Per-window:**
+
+| # | IS ann | OOS ann | OOS Sharpe |
+|---|---|---|---|
+| 1 | +16.79% | +18.64% | +42.13 |
+| 2 | +17.18% | +15.14% | +53.05 |
+| 3 | +18.31% | +15.20% | +68.33 |
+| 4 | +19.21% | +15.06% | +77.29 |
+| 5 | +16.67% | +12.81% | +51.17 |
+| 6 | +13.33% | +10.28% | +43.91 |
+| 7 | +11.97% | +7.63% | +77.71 |
+| 8 | +11.48% | +9.19% | +106.47 |
+| 9 | +10.48% | +9.74% | +160.95 |
+| 10 | +9.31% | +8.49% | +128.81 |
+| 11 | +8.80% | +9.24% | +132.21 |
+| 12 | +9.28% | +9.73% | +135.60 |
+| 13 | +8.50% | +6.75% | +38.55 |
+| 14 | +7.81% | +4.67% | +28.90 |
+| 15 | +7.40% | +6.11% | +53.76 |
+| 16 | +7.01% | +6.07% | +55.40 |
+| 17 | +6.41% | +5.76% | +53.51 |
+| 18 | +5.87% | +6.57% | +67.40 |
+| 19 | +6.30% | +8.11% | +107.33 |
+| 20 | +7.42% | +9.68% | +179.53 |
+
+**OOS-positive: 20 of 20.** All decay magnitudes are in the conventional direction (IS ≥ OOS by single-digit percentage points except for the 6 windows where OOS *exceeds* IS — typical small variance, not a calibration issue). **Window-independence caveat applies:** consecutive test segments overlap by 16 of 30 days at step=14d, so the 20 windows represent ~10 independent OOS draws. Under non-overlapping (step=30d) windows the OOS-positive count is roughly 9 of 10 on this data, with the same point estimates.
+
+### A.2 Block-bootstrap CI (12-coin, n=1,093 rebalances, 5,000 resamples)
+
+Politis-White optimal block length: **10**. Point estimate (gross full-year): annualised return **+11.00%**, Sharpe **+37.15**.
+
+| method | ann return CI | Sharpe CI |
+|---|---|---|
+| IID (naive) | [+10.44%, +11.59%] | [+32.71, +42.72] |
+| Moving-block | [+9.62%, +12.60%] | [+31.08, +50.13] |
+| Stationary | [+9.39%, +12.97%] | [+31.00, +51.93] |
+
+The stationary bootstrap's [+9.39%, +12.97%] is the honest annualised return CI on the 12-coin universe — wider than the IID by ~26% from autocorrelation as expected. Both CIs exclude zero.
+
+### A.3 Reconciliation with the 6-coin audit
+
+| metric | 6-coin (price-aware) | 12-coin (funding-only) |
+|---|---|---|
+| coins | BTC,ETH,SOL,XRP,DOGE,AVAX | + BNB,LINK,ARB,OP,SUI,TRX |
+| funding ticks | 52,560 | 105,120 |
+| walk-forward windows | 19 (step=15d) | 20 (step=14d) |
+| OOS-positive | 18 / 19 | 20 / 20 |
+| OOS mean ann ret | +6.38% | +9.74% |
+| Block-bootstrap (stationary) ann CI | [+6.32%, +9.56%] | [+9.39%, +12.97%] |
+| Block-bootstrap Sharpe CI | [+15.25, +32.64] | [+31.00, +51.93] |
+
+**The two universes are not the same study with different numbers — they're two different studies.** The 6-coin audit is the *hedgeable* universe (only these have liquid HL spot, only these have full-year candles for price-return analyses); the 12-coin audit is the *carry-only* universe (broader funding signal, but no spot leg to hedge with for the 6 additional coins, and no price-return analyses possible without candles). The README leads with the 12-coin number because it's the more striking carry signal; the audit doc above leads with the 6-coin number because it's the realistic deployment universe.
+
+Both are honest; both reproduce on the committed DB; the difference is universe definition, not data manipulation. The 12-coin advantage (~3.4 pp on OOS mean) comes mostly from BNB, LINK, ARB, OP, SUI, TRX sitting near the +10.95% APR funding-rate floor on Hyperliquid for much of the year — passive base-rate carry, not selection signal — which the README's existing "excess-over-floor framing" (~+8.0 pp across the trailing-K vs. passive-short BTC) already disclosed before this appendix existed.

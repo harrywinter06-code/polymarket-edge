@@ -169,7 +169,14 @@ def main() -> None:
         )
         yes_token = str(token_ids[0])
 
-        price = float(m.get("bestBid")) if side_const == SELL else float(m.get("bestAsk"))
+        raw_price = m.get("bestBid") if side_const == SELL else m.get("bestAsk")
+        if raw_price is None:
+            # Market is missing top-of-book on the flagged side (no resting
+            # quote); skip rather than crash. Logged so the user knows the
+            # signed-order count may be less than --max-orders.
+            print(f"  skipped: {m.get('question', '?')[:60]:60s} (no {('bestBid' if side_const == SELL else 'bestAsk')} on flagged side)")
+            continue
+        price = float(raw_price)
         if price <= 0:
             continue
         size_shares = round(notional_per / price, 4)
