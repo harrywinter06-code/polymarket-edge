@@ -174,7 +174,9 @@ def main() -> None:
             # Market is missing top-of-book on the flagged side (no resting
             # quote); skip rather than crash. Logged so the user knows the
             # signed-order count may be less than --max-orders.
-            print(f"  skipped: {m.get('question', '?')[:60]:60s} (no {('bestBid' if side_const == SELL else 'bestAsk')} on flagged side)")
+            side_label = "bestBid" if side_const == SELL else "bestAsk"
+            q = m.get("question", "?")[:60]
+            print(f"  skipped: {q:60s} (no {side_label} on flagged side)")
             continue
         price = float(raw_price)
         if price <= 0:

@@ -502,7 +502,9 @@ def _polymarket_sections(conn: sqlite3.Connection) -> str:
     micro_section = _microstructure_section(conn)
     return f"""
   <h2>Top flagged events (build-window snapshot, 2026-05-21)</h2>
-  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown report uses. Top-of-book gaps drift hourly with market activity; re-run <code>polymarket-edge scan</code> for the current state.</p>
+  <p class="muted">Dedup-by-event, threshold 50 bp. Same SQL the markdown
+  report uses. Top-of-book gaps drift hourly with market activity; re-run
+  <code>polymarket-edge scan</code> for the current state.</p>
   {flagged_table}
 
   <h2 id="depth">Depth-vs-trap</h2>
@@ -544,7 +546,12 @@ def _hyperliquid_sections(png_dir: Path, conn: sqlite3.Connection) -> str:
   {cadence_chart}
 
   <h2>Gross strategy results (in-sample, 12-coin universe, 365d)</h2>
-  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h. <strong>Hit% is the share of 8h periods with positive realised funding net</strong>, not directional accuracy: it reflects the persistence of the carry signal, not stock-picking. The 97% number is the property a funding-rate floor at the maximum-leverage clamp creates, not a forecasting skill claim.</p>
+  <p class="muted">Rebalance 8h, top-K = 5, trailing window = 24h.
+  <strong>Hit% is the share of 8h periods with positive realised funding
+  net</strong>, not directional accuracy: it reflects the persistence of
+  the carry signal, not stock-picking. The 97% number is the property a
+  funding-rate floor at the maximum-leverage clamp creates, not a
+  forecasting skill claim.</p>
   {strategy_table}
 
   <h2>Hedge cost sensitivity by cadence</h2>
