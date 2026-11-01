@@ -312,3 +312,13 @@ PYTHONPATH=src python scripts/sensitivity.py  # backtest hyperparameter sweep
 - **Day 5 (impressive pass, parallel agent work).** Four more concurrent additions: `dashboard.py` (single-file HTML with embedded charts), `cross_venue.py` + `CROSSVENUE.md` (Fed-cuts↔BTC null finding, methodology), `hl_stats.py` (bootstrap 95% CIs, headline +19% becomes "+19% point, [+15%, +24%] CI"), `hl_strategies.py` (funding-momentum variant, lost to level by 9pp, useful "what didn't work" data). +9 tests (54 total).
 - **Day 5 (wow pass, parallel agent work).** Four concurrent streams to close the "structural ceiling" gap from REDTEAM §6: `microstructure.py` + `MICROSTRUCTURE.md` (the headline empirical finding, 63% trap rate on detector flags, 85% in US state races), `walkforward.py` (out-of-sample validation, OOS slightly beats IS, signal is durable), `hl_stats_block.py` (block bootstrap, autocorrelation widens CI by 28%, honest band is [+14.1%, +25.2%]), `EXECUTION.md` + `scripts/size_basket_trade.py` (real-trade runway with UK-jurisdiction simulation path). +23 tests (79 total).
 - **Day 5 (sharpen pass, parallel agent work).** Four more streams. Biggest narrative shift: the volume-weighted reframing. The count-based 55.6% trap rate becomes 0.012% by dollar-weighted volume because the World Cup `real` event carries 95.9% of flagged dollars. Also: `trap_classifier.py` (LOOCV AUC 0.600 on n=18, scaffolding-grade with documented small-n caveat), `hl_tail.py` (VaR, Expected Shortfall, drawdown duration; the GROSS-vs-NET tail asymmetry is what kills the 8h cadence), and a full visual polish on `dashboard.py` + `plots.py` (monospace numerics, restrained palette, 144 DPI charts, mobile-responsive). +30 tests (109 total).
+
+---
+
+## Author
+
+Built by **[Harry Winter](https://harrywinter06-code.github.io/)**, an Information Management for Business student at UCL in London.
+
+- Project write-up: [harrywinter06-code.github.io/projects/polymarket-edge/](https://harrywinter06-code.github.io/projects/polymarket-edge/)
+- Portfolio: [harrywinter06-code.github.io](https://harrywinter06-code.github.io/)
+- LinkedIn: [linkedin.com/in/harry-p-winter](https://www.linkedin.com/in/harry-p-winter)
